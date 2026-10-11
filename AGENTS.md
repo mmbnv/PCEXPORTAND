@@ -107,6 +107,17 @@ python -m portagent memory --memory <db>
   with `WINEDLLOVERRIDES=...=n,b`, and (d) rewrites the Turnip ICD path.
 - Tests for the packager are skipped (not faked) when the SDK is absent.
 - `*.apk` is git-ignored — never commit build outputs.
+- **Zip entry names must be written verbatim.** `zipfile.ZipFile.write()` →
+  `ZipInfo.from_file()` runs the arcname through `os.path.normpath`, which
+  rewrites `/` to `\` on Windows. A `\`-named entry (`assets\runtime\...`)
+  breaks Android asset lookup and looks like a malformed package on install.
+  `_assemble` therefore builds `ZipInfo` objects directly and stores names with
+  `/`; `_validate_entries` refuses to report `ok` for any name with a backslash
+  or an unsafe path. The regression test poisons `ZipInfo.from_file` to catch a
+  return to `write()`.
+- Assets are deflated (`AssetManager.open()` is compression-agnostic; the
+  loader never uses `openFd()`), which takes the pilot APK from ~560 MB to
+  ~170 MB. Native `.so` and `classes.dex` stay stored for `zipalign -p`.
 
 ## One-folder bundle (everything in one place)
 
