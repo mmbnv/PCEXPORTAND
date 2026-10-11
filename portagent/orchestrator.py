@@ -78,6 +78,8 @@ class PortAgent:
         self._profile_engine: str | None = None
         self._env_failure = False
         self._apk_built = False
+        self._last_strategy: PortStrategy | None = None
+        self._last_verify: dict[str, Any] | None = None
 
     # -- report helper ----------------------------------------------------
     def _emit(
@@ -162,7 +164,8 @@ class PortAgent:
                     detail={"tried": [t.value for t in tried]},
                 )
                 status = "exhausted" if tried else "impossible"
-                return self._finish(status, iteration, None, profile)
+                return self._finish(status, iteration, self._last_strategy, profile,
+                                    verify=self._last_verify)
             tried.add(chosen.name)
             self._emit(
                 StepName.CHOOSE,
@@ -238,6 +241,8 @@ class PortAgent:
                 translated, build.objects, build.status, apk_signed=pkg.signed
             )
             verify_path = write_json(exec_dir / "verify_result.json", verify.to_dict())
+            self._last_strategy = chosen.name
+            self._last_verify = verify.to_dict()
             self._emit(
                 StepName.VERIFY,
                 inp=chosen.name.value,
@@ -302,7 +307,8 @@ class PortAgent:
                 return self._finish("accepted", iteration, chosen.name, profile, build.apk, verify.to_dict())
 
         # Loop budget exhausted without success.
-        return self._finish("inconclusive", self.max_iterations, None, profile)
+        return self._finish("inconclusive", self.max_iterations, self._last_strategy, profile,
+                            verify=self._last_verify)
 
     def _finish(
         self,
