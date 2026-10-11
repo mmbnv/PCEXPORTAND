@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.sqlite
+portagent_run/
+pilot/
+pilot*/
+run/
+*.apk
+*.o
+*.dat
+nul
+.agent_tmp/
