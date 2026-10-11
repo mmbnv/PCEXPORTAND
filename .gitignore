@@ -10,3 +10,5 @@ run/
 *.dat
 nul
 .agent_tmp/
+portagent_report.json
+portagent_report.md
