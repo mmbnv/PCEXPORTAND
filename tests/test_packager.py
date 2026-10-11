@@ -154,6 +154,33 @@ class PackagerTests(unittest.TestCase):
         self.assertTrue(any(n.startswith("lib/arm64-v8a/") for n in names))
         self.assertTrue(any(n.startswith("assets/game/") for n in names))
 
+    def test_apk_entry_names_use_forward_slashes(self):
+        # Regression: on Windows str(Path) yields '\' separators, which break
+        # Android asset lookup and make the package look malformed.
+        import zipfile
+
+        res = self._package("native_d3d11_x86")
+        self.assertEqual(res.status, "ok", msg=str(res.logs[-3:]))
+        with zipfile.ZipFile(res.apk) as z:
+            names = z.namelist()
+        offenders = [n for n in names if "\\" in n]
+        self.assertEqual(offenders, [], msg=f"backslash entries: {offenders[:5]}")
+        self.assertTrue(any(n.startswith("assets/") for n in names))
+
+    def test_assemble_avoids_zipfile_write_normpath(self):
+        # ZipFile.write() -> ZipInfo.from_file() -> os.path.normpath turns
+        # 'a/b' into 'a\\b' on Windows. If _assemble ever relies on write()
+        # again, entry names regress and Android rejects the APK. Poison
+        # from_file and require the build to still succeed.
+        import zipfile
+        from unittest import mock
+
+        with mock.patch.object(
+            zipfile.ZipInfo, "from_file", side_effect=AssertionError("ZipFile.write used")
+        ):
+            res = self._package("native_d3d11_x86")
+        self.assertEqual(res.status, "ok", msg=str(res.logs[-3:]))
+
     def test_apk_embeds_runtime_config(self):
         import json
         import zipfile

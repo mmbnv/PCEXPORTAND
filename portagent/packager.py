@@ -284,6 +284,9 @@ class ApkPackager:
             res.apk = str(final)
             res.apk_size = final.stat().st_size
             res.abis = abis
+            if str(res.steps.get("assemble", "")).startswith("fail"):
+                res.status = "fail"
+                return res
             res.status = "ok" if res.signed else "partial"
             return res
         except Exception as exc:  # noqa: BLE001 - report, never crash the caller
@@ -889,25 +892,60 @@ class ApkPackager:
         return abis
 
     def _assemble(self, base_apk: Path, proj: Path, final: Path, res: PackageResult) -> None:
+        import time
         import zipfile
+
+        # Zip entry names must use '/' separators and must be relative. On
+        # Windows a '\'-separated name breaks Android asset lookup (and looks
+        # like a malformed package); '..' / a leading '/' are rejected outright
+        # by ZipPathValidator on targetSdk 34. CPython's ZipFile.write() cannot
+        # be used for this: it runs the arcname through os.path.normpath, which
+        # rewrites '/' to '\' on Windows. So build ZipInfo objects ourselves.
+        def _put(path: Path, arcname: str, compress: int) -> None:
+            st = path.stat()
+            zi = zipfile.ZipInfo(arcname, time.localtime(st.st_mtime)[:6])
+            zi.external_attr = (st.st_mode & 0xFFFF) << 16
+            zi.compress_type = compress
+            with open(path, "rb") as fh:
+                dst.writestr(zi, fh.read())
 
         with zipfile.ZipFile(base_apk, "r") as src, zipfile.ZipFile(final, "w") as dst:
             for item in src.infolist():
-                dst.writestr(item, src.read(item.filename))
+                data = src.read(item.filename)
+                item.filename = item.filename.replace("\\", "/")
+                dst.writestr(item, data)
             # classes.dex
             dex = proj / "classes.dex"
             if dex.is_file():
-                dst.write(dex, "classes.dex")
-            # native libs
+                _put(dex, "classes.dex", zipfile.ZIP_STORED)
+            # native libs -- stored so zipalign -p can page-align them
             for so in (proj / "jni").rglob("*.so"):
-                arc = "lib/" + so.parent.name + "/" + so.name
-                dst.write(so, arc)
-            # game assets
+                _put(so, "lib/" + so.parent.name + "/" + so.name, zipfile.ZIP_STORED)
+            # game assets + runtime bundle -- deflated: the bundle is large
+            # (hundreds of MB) and the Java loader reads it with AssetManager
+            # .open(), which is compression-agnostic.
             for f in (proj / "assets").rglob("*"):
                 if f.is_file():
-                    arc = "assets/" + str(f.relative_to(proj / "assets"))
-                    dst.write(f, arc)
+                    rel = f.relative_to(proj / "assets").as_posix()
+                    _put(f, "assets/" + rel, zipfile.ZIP_DEFLATED)
         res.steps["assemble"] = "ok"
+        self._validate_entries(final, res)
+
+    @staticmethod
+    def _validate_entries(apk: Path, res: PackageResult) -> None:
+        """Refuse to report success for an APK Android would reject."""
+        import zipfile
+
+        problems: list[str] = []
+        with zipfile.ZipFile(apk) as z:
+            for name in z.namelist():
+                if "\\" in name:
+                    problems.append(f"backslash in name: {name}")
+                elif name.startswith("/") or name.startswith("../") or "/../" in name:
+                    problems.append(f"unsafe path: {name}")
+        if problems:
+            res.steps["assemble"] = "fail (bad entry names)"
+            res.logs.append("invalid APK entry names: " + "; ".join(problems[:5]))
 
     def _align(self, tools: dict[str, str], apk: Path, res: PackageResult) -> None:
         aligned = apk.with_suffix(".aligned.apk")
