@@ -374,6 +374,10 @@ build-tools, platform, NDK и cmake, а затем **напечатает гот
 
 ```powershell
 $ErrorActionPreference = "Continue"
+# JDK (provides javac, needed for the build) - skip if you already have one.
+if (-not (Get-Command javac -ErrorAction SilentlyContinue) -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+    winget install --silent --accept-source-agreements --accept-package-agreements Microsoft.OpenJDK.17
+}
 $Tools = Join-Path $env:USERPROFILE ".portagent-tools"
 $AndroidSdk = Join-Path $Tools "android-sdk"
 New-Item -ItemType Directory -Force -Path $Tools | Out-Null
