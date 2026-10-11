@@ -267,6 +267,23 @@ def _cmd_memory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Download JDK + Android SDK/NDK into the tools home (no apt/winget)."""
+    from . import bootstrap as bs
+
+    def progress(stage: str, msg: str) -> None:
+        print(f"[{stage}] {msg}", flush=True)
+
+    res = bs.bootstrap(progress=progress)
+    print(json.dumps(res.to_dict(), indent=2, ensure_ascii=False))
+    if res.ok:
+        bs.apply_env(res)
+        print("\nToolchain ready. Build a port:  python -m portagent port <game>")
+        return 0
+    print("\nToolchain incomplete; see steps/logs above.", file=sys.stderr)
+    return 1
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from .gui import launch, is_available
@@ -330,6 +347,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fr.add_argument("--force", action="store_true", help="re-unpack even if present")
     fr.set_defaults(func=_cmd_fetch_runtimes)
+
+    bs = sub.add_parser(
+        "bootstrap",
+        help="download a JDK + Android SDK/NDK (no apt/winget needed)",
+    )
+    bs.set_defaults(func=_cmd_bootstrap)
     return p
 
 

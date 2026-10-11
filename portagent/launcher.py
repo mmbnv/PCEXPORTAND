@@ -98,9 +98,11 @@ def run_port(
     if toolchain is None:
         # Fail fast with an actionable reason instead of a generic build error.
         msg = (
-            "Android SDK/NDK not found. Set ANDROID_HOME (or ANDROID_SDK_ROOT) to a "
-            "folder containing build-tools/ and platforms/android-*/android.jar, then "
-            "retry. On Windows run scripts/bootstrap_android.ps1 first."
+            "Android SDK/NDK not found. Run the built-in bootstrap to download a "
+            "JDK + Android SDK/NDK with no system installers required:\n"
+            "    python -m portagent bootstrap\n"
+            "then re-run. (Advanced: set ANDROID_HOME/ANDROID_SDK_ROOT to an "
+            "existing SDK that contains build-tools/ and platforms/android-*/android.jar.)"
         )
         _emit(progress, "EXECUTE", msg)
         return {
@@ -318,18 +320,8 @@ def format_markdown(report: dict[str, Any]) -> str:
         if not env.get("android_toolchain"):
             lines += ["", "## Next step", "",
                       "No Android SDK/NDK was found, so no strategy can build an APK. "
-                      "Install the toolchain and re-run the loop:"]
-            if str(env.get("platform", "")).lower().startswith("windows"):
-                lines.append("")
-                lines.append("```powershell")
-                lines.append("powershell -ExecutionPolicy Bypass -File scripts\\bootstrap_android.ps1")
-                lines.append("```")
-            else:
-                lines.append("")
-                lines.append("```bash")
-                lines.append("scripts/bootstrap_android.sh")
-                lines.append("```")
-            lines.append("")
-            lines.append("Then set `ANDROID_HOME` (and `ANDROID_NDK_HOME`) and re-run. "
-                         "See `docs/USAGE.md` section 7 for a git-free install.")
+                      "Install the toolchain with the built-in bootstrap (downloads a "
+                      "JDK + Android SDK/NDK; no system installer required) and re-run:"]
+            lines += ["", "```", "python -m portagent bootstrap", "```", ""]
+            lines.append("Then re-run the loop. See `docs/USAGE.md` section 7 for details.")
     return "\n".join(lines) + "\n"

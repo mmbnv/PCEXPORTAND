@@ -43,13 +43,16 @@ from pathlib import Path
 from .toolpaths import tools_home
 
 # Pinned upstream release.  Bumping this is a deliberate, reviewed change.
+WINLATOR_TAG = "v11.2.0"
+# The release asset omits the trailing patch component ("Winlator_11.2.apk"),
+# so it cannot be derived from the tag alone.
+WINLATOR_ASSET = "Winlator_11.2.apk"
 WINLATOR_VERSION = "11.2.0"
+WINLATOR_REPO = "brunodev85/winlator"
 WINLATOR_APK_URL = (
-    "https://github.com/brunodev85/winlator/releases/download/"
-    f"v{WINLATOR_VERSION}/Winlator_{WINLATOR_VERSION}.apk"
+    f"https://github.com/{WINLATOR_REPO}/releases/download/"
+    f"{WINLATOR_TAG}/{WINLATOR_ASSET}"
 )
-
-from .toolpaths import tools_home
 
 RUNTIME_HOME = tools_home() / "runtime"
 CACHE_HOME = tools_home() / "cache"
@@ -145,7 +148,13 @@ def _have_zstd() -> bool:
         import zstandard  # noqa: F401
         return True
     except ImportError:
-        return bool(shutil.which("zstd"))
+        pass
+    if shutil.which("zstd"):
+        return True
+    # Windows 10+ and macOS ship bsdtar, which decompresses zstd on its own.
+    if shutil.which("tar") and os.name == "nt":
+        return True
+    return False
 
 
 def _extract_tzst(data: bytes, dest: Path) -> None:
@@ -160,16 +169,56 @@ def _extract_tzst(data: bytes, dest: Path) -> None:
         return
     except ImportError:
         pass
-    if not shutil.which("zstd"):
-        raise RuntimeError_(
-            "need the 'zstandard' Python package or the 'zstd' CLI to unpack runtimes"
-        )
+    # No python-zstandard: try the CLI.  bsdtar (Windows/macOS) auto-detects the
+    # compression and rejects --zstd, so try the plain form first, then --zstd.
     tmp = dest.parent / (dest.name + ".tzst")
     tmp.write_bytes(data)
     try:
-        subprocess.run(["tar", "--zstd", "-xf", str(tmp), "-C", str(dest)], check=True)
+        for args in (["tar", "-xf", str(tmp), "-C", str(dest)],
+                     ["tar", "--zstd", "-xf", str(tmp), "-C", str(dest)]):
+            if not shutil.which(args[0]):
+                continue
+            try:
+                subprocess.run(args, check=True)
+                return
+            except subprocess.CalledProcessError:
+                continue
     finally:
         tmp.unlink(missing_ok=True)
+    raise RuntimeError_(
+        "cannot unpack the runtime: install zstd support with "
+        "`python -m pip install zstandard` and retry"
+    )
+
+
+def _resolve_winlator_url(progress=None) -> str:
+    """Return a working Winlator APK URL.
+
+    Prefer the pinned asset; if it is gone (upstream re-tagged or removed it),
+    ask the GitHub API for the newest release that ships a ``Winlator_*.apk``.
+    """
+    try:
+        req = urllib.request.Request(
+            WINLATOR_APK_URL, method="HEAD",
+            headers={"User-Agent": "portagent"},
+        )
+        with urllib.request.urlopen(req, timeout=60):
+            return WINLATOR_APK_URL
+    except Exception:  # noqa: BLE001 - fall through to the API
+        pass
+    _emit(progress, "fetch", "pinned runtime URL unavailable; querying GitHub releases")
+    api = f"https://api.github.com/repos/{WINLATOR_REPO}/releases?per_page=10"
+    req = urllib.request.Request(api, headers={"User-Agent": "portagent"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        releases = json.load(resp)
+    for rel in releases:
+        for asset in rel.get("assets", []):
+            name = asset.get("name", "")
+            if name.startswith("Winlator_") and name.endswith(".apk"):
+                return asset["browser_download_url"]
+    raise RuntimeError_(
+        f"no Winlator APK asset found in {WINLATOR_REPO} releases"
+    )
 
 
 def ensure_winlator_apk(progress=None, url: str = WINLATOR_APK_URL,
@@ -179,6 +228,8 @@ def ensure_winlator_apk(progress=None, url: str = WINLATOR_APK_URL,
     apk = CACHE_HOME / f"winlator-{version}.apk"
     if apk.is_file() and apk.stat().st_size > 10_000_000:
         return apk, _sha256_file(apk)
+    if url == WINLATOR_APK_URL:
+        url = _resolve_winlator_url(progress)
     _emit(progress, "fetch", f"downloading Winlator {version} (~150 MB, cached afterwards)")
     tmp = apk.with_suffix(".part")
     try:
@@ -197,7 +248,10 @@ def fetch_runtimes(force: bool = False, progress=None,
     home = Path(runtime_home) if runtime_home else RUNTIME_HOME
     res = FetchResult(ok=False)
     if not _have_zstd():
-        res.logs.append("no zstd support: pip install zstandard")
+        res.logs.append(
+            "no zstd support: run `python -m pip install zstandard` (or install the "
+            "'zstd' command-line tool) and retry"
+        )
         return res
 
     apk, sha = ensure_winlator_apk(progress)

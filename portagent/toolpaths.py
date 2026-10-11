@@ -14,6 +14,7 @@ setup at all, while an explicit env var still overrides everything.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -35,8 +36,28 @@ def tools_home() -> Path:
     return Path.home() / ".portagent-tools"
 
 
+def _load_bootstrap_env() -> None:
+    """Import the env a prior ``portagent bootstrap`` recorded, if any.
+
+    Without this, the SDK/NDK a user just downloaded would be invisible to the
+    very next command, so they would have to hand-copy ``setx`` lines. Explicit
+    variables in the current shell always win.
+    """
+    env_file = tools_home() / "env.json"
+    if not env_file.is_file():
+        return
+    try:
+        data = json.loads(env_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for key, value in data.items():
+        if key.startswith(("ANDROID_", "JAVA_HOME", "PAGENT_TOOLS_HOME")) and value:
+            os.environ.setdefault(key, str(value))
+
+
 def android_home() -> str | None:
     """Android SDK root: env first, then ``<tools_home>/android-sdk``."""
+    _load_bootstrap_env()
     for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
         if os.environ.get(var):
             return os.environ[var]

@@ -138,3 +138,31 @@ dist/portagent-bundle/
   fallback (or the real cache) makes an SDK appear.
 - `dist/` is git-ignored. Never commit the ~3.4 GB bundle; rebuild it with the
   script instead.
+
+## Bootstrapping a toolchain (no installers)
+
+`python -m portagent bootstrap` (menu option 9, GUI "Install toolchain") is the
+supported way to get a working Android toolchain on a clean machine. It is pure
+Python — it does **not** shell out to `apt`, `winget`, or `choco`:
+
+1. find an existing JDK (`JAVA_HOME` or an already-unpacked Temurin in the
+   tools home); otherwise download Temurin 17 from the Adoptium API;
+2. download the Android `commandlinetools` zip, fix up the Unix executable bit
+   (Python's `zipfile` drops it — without this `sdkmanager` is not runnable),
+   then run `sdkmanager --licenses` and install
+   `platform-tools`, `build-tools;34.0.0`, `platforms;android-34`, and
+   `ndk;26.1.10909125`;
+3. write `env.json` into the tools home and export the values into the process.
+
+`portagent/toolpaths.py` auto-loads `<tools_home>/env.json` (via
+`_load_bootstrap_env`) so the *next* command finds the SDK with no `setx` or
+`export`; explicit shell variables always win (`os.environ.setdefault`).
+
+On Windows the packager invokes `.bat`/`.cmd` through `cmd.exe` (CreateProcess
+cannot exec them directly), and `javac`/`keytool` are resolved through
+`JAVA_HOME` first via `packager._java_tool`.
+
+`portagent/runtimes.py` pins the Winlator release; the release asset is
+`Winlator_11.2.apk` (no trailing `.0`). If the pinned URL ever 404s,
+`_resolve_winlator_url` falls back to the GitHub releases API so the fetch
+self-heals instead of hard-failing.

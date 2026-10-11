@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from portagent import runtimes
 
@@ -42,6 +43,38 @@ class ElfMachineTests(unittest.TestCase):
             p = Path(td) / "notes.txt"
             p.write_text("hello")
             self.assertIsNone(runtimes._elf_machine(p))
+
+
+class WinlatorUrlTests(unittest.TestCase):
+    def test_pinned_asset_name_matches_release(self):
+        # Regression: the asset is "Winlator_11.2.apk", not "...11.2.0.apk".
+        self.assertEqual(runtimes.WINLATOR_ASSET, "Winlator_11.2.apk")
+        self.assertTrue(runtimes.WINLATOR_APK_URL.endswith("/Winlator_11.2.apk"))
+
+    def test_resolver_falls_back_to_api_when_pinned_missing(self):
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                import json as _j
+                return _j.dumps([
+                    {"assets": [{"name": "Winlator_99.0.apk",
+                                 "browser_download_url": "https://x/win.apk"}]}
+                ]).encode()
+
+        def fake_urlopen(req, timeout=60):
+            method = getattr(req, "method", None) or req.get_method()
+            if method == "HEAD":
+                raise RuntimeError("404")
+            return FakeResp()
+
+        with mock.patch.object(runtimes.urllib.request, "urlopen", fake_urlopen):
+            url = runtimes._resolve_winlator_url()
+        self.assertEqual(url, "https://x/win.apk")
 
 
 class TzstExtractTests(unittest.TestCase):

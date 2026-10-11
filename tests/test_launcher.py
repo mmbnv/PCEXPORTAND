@@ -85,7 +85,7 @@ class MarkdownReportTests(unittest.TestCase):
         self.assertIn("Reason: environment incomplete", md)
         self.assertIn("Tools missing: aapt2, d8", md)
         self.assertIn("## Next step", md)
-        self.assertIn("bootstrap_android.ps1", md)
+        self.assertIn("python -m portagent bootstrap", md)
 
     def test_ready_toolchain_has_no_next_step(self):
         report = {

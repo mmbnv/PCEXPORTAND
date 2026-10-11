@@ -200,6 +200,30 @@ class Session:
                 print(f"    {_wrap('note', C.YELLOW)}: {n}")
         print(_wrap(f"\n  Full profile saved in the report (option 5).", C.DIM))
 
+    def bootstrap(self) -> None:
+        """Download a JDK + Android SDK/NDK with no system installer needed."""
+        from portagent import bootstrap as bs
+
+        print()
+        print(_wrap("Installing the Android build toolchain ...", C.BOLD))
+        print(_wrap("  downloads a JDK (~180 MB) + Android SDK/NDK (~2 GB); "
+                    "cached under the tools folder", C.DIM))
+        try:
+            res = bs.bootstrap(progress=self._progress)
+        except Exception as exc:  # noqa: BLE001
+            print(_wrap(f"Bootstrap failed: {exc}", C.RED))
+            return
+        if res.ok:
+            bs.apply_env(res)
+            print(_wrap(f"  toolchain ready: {res.android_home}", C.GREEN))
+            if res.ndk_home:
+                print(_wrap(f"  ndk: {res.ndk_home}", C.DIM))
+            print(_wrap("  Now choose a game and Build APK (option 3).", C.CYAN))
+        else:
+            print(_wrap(f"  incomplete: {res.message}", C.YELLOW))
+            for step, state in res.steps.items():
+                print(f"    {step}: {state}")
+
     def build(self) -> None:
         if not self.game:
             print(_wrap("Pick a game first (option 1).", C.YELLOW))
@@ -207,10 +231,9 @@ class Session:
         if not self.toolchain_ready():
             print()
             print(_wrap("Android SDK/NDK not found — a real APK cannot be built yet.", C.RED))
-            print("Install it, then set ANDROID_HOME (or ANDROID_SDK_ROOT):")
-            print(_wrap("  Windows:  powershell -ExecutionPolicy Bypass "
-                        "-File scripts\\bootstrap_android.ps1", C.CYAN))
-            print(_wrap("  Linux/macOS:  scripts/bootstrap_android.sh", C.CYAN))
+            print(_wrap("Fix it in one step (no system installers required):", C.CYAN))
+            print(_wrap("  menu option 9  ->  Install Android toolchain", C.CYAN))
+            print(_wrap("or from a terminal:  python -m portagent bootstrap", C.DIM))
             print(_wrap("Option 8 shows exactly what is missing. Analysis (option 2) "
                         "still works without the SDK.", C.DIM))
             return
@@ -360,6 +383,7 @@ MENU = """
   6. Settings
   7. Open desktop GUI
   8. Show environment / tools
+  9. Install Android toolchain (auto-download, no installers)
   0. Quit
 """
 
@@ -381,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     while True:
         _title()
         sdk = (_wrap("ready", C.GREEN) if sess.toolchain_ready()
-               else _wrap("MISSING - set ANDROID_HOME (see option 8)", C.RED))
+               else _wrap("MISSING - install it with option 9", C.RED))
         print(MENU.format(
             title=_wrap("Main menu", C.BOLD),
             game=sess.game or _wrap("(none selected)", C.YELLOW),
@@ -389,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             sdk=sdk,
             hr=_wrap("-" * 68, C.DIM),
         ))
-        choice = _ask("Choose [0-8] > ")
+        choice = _ask("Choose [0-9] > ")
         if choice is None:
             print(_wrap("Bye.", C.DIM))
             return 0
@@ -412,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
             open_gui()
         elif choice == "8":
             sess.show_env()
+        elif choice == "9":
+            sess.bootstrap()
         else:
             print(_wrap("Unknown option.", C.YELLOW))
         _ask(_wrap("\nPress Enter to continue...", C.DIM))

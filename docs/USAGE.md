@@ -398,6 +398,29 @@ python -m portagent run /path/to/game --work-dir ./run --max-iterations 6
 
 ## 7. Сборка настоящего APK (Android SDK/NDK)
 
+Самый простой путь — встроенный бутстрап на чистом Python. Он **не требует**
+`apt`, `winget` или `choco`: сам скачивает JDK (Temurin 17) и Android
+command-line tools, а затем через `sdkmanager` ставит build-tools, платформу и
+NDK. Всё кладётся в папку инструментов (`PAGENT_TOOLS_HOME` или
+`~/.portagent-tools`), систему не трогает.
+
+```bash
+python -m portagent bootstrap
+```
+
+На Windows то же самое (PowerShell / cmd, из корня репозитория):
+
+```powershell
+python -m portagent bootstrap
+```
+
+В интерактивном меню это пункт **9. Install Android toolchain**, а в GUI —
+кнопка **Install toolchain**. По завершении бутстрап печатает готовые
+переменные (`ANDROID_HOME`, `ANDROID_NDK_HOME`, `JAVA_HOME`) и сразу делает их
+видимыми для текущего процесса.
+
+Альтернативные (системные) скрипты, если вы предпочитаете пакетный менеджер:
+
 ```bash
 scripts/bootstrap_android.sh          # JDK + Android SDK + NDK + Gradle (Linux/macOS)
 scripts/bootstrap_android.sh --full   # ещё Ghidra, jadx, apktool, Il2CppDumper

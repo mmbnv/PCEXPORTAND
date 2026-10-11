@@ -64,15 +64,37 @@ class PackageResult:
 
 
 def _run(cmd: list[str], cwd: str | Path | None = None, timeout: int = 1800) -> tuple[int, str]:
+    # Windows cannot exec a .bat/.cmd directly from CreateProcess; route it
+    # through cmd.exe. Without this, every sdkmanager/d8/apksigner .bat fails
+    # with WinError 193 ("not a valid Win32 application").
+    argv = list(cmd)
+    if os.name == "nt" and argv and Path(argv[0]).suffix.lower() in (".bat", ".cmd"):
+        argv = ["cmd", "/c", *argv]
     try:
         p = subprocess.run(
-            cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout
+            argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout
         )
         return p.returncode, (p.stdout + p.stderr)
     except FileNotFoundError:
-        return 127, f"not found: {cmd[0]}"
+        return 127, f"not found: {argv[0]}"
     except subprocess.TimeoutExpired:
-        return 124, f"timeout after {timeout}s: {' '.join(cmd[:3])}"
+        return 124, f"timeout after {timeout}s: {' '.join(argv[:3])}"
+
+
+def _java_tool(name: str) -> str:
+    """Resolve a JDK tool (javac/keytool), preferring ``JAVA_HOME``.
+
+    A bootstrapped JDK is not on PATH, so calling bare ``javac`` would fail on
+    a clean Windows box even after the SDK installs.
+    """
+    exe = f"{name}.exe" if os.name == "nt" else name
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        cand = Path(java_home) / "bin" / exe
+        if cand.is_file():
+            return str(cand)
+    found = shutil.which(name)
+    return found or name
 
 
 def _tool_in(directory: Path, name: str) -> str | None:
@@ -229,7 +251,7 @@ class ApkPackager:
                 return res
 
             # 3) java -> class -> dex
-            rc, out = _run(["javac", "-source", "8", "-target", "8",
+            rc, out = _run([_java_tool("javac"), "-source", "8", "-target", "8",
                             "-classpath", tools["android_jar"],
                             "-d", str(proj / "classes"),
                             *[str(p) for p in (proj / "java").rglob("*.java")]])
@@ -902,7 +924,7 @@ class ApkPackager:
         ks = self.work_dir / "portagent.keystore"
         if not ks.exists():
             rc, out = _run([
-                "keytool", "-genkeypair", "-keystore", str(ks), "-alias", "portagent",
+                _java_tool("keytool"), "-genkeypair", "-keystore", str(ks), "-alias", "portagent",
                 "-storepass", "portagent", "-keypass", "portagent",
                 "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
                 "-dname", "CN=PortAgent, OU=Ports, O=PortAgent, L=NA, ST=NA, C=NA",

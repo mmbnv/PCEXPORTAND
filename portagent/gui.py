@@ -78,6 +78,9 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
         ttk.Checkbutton(actions, text="skip decompile",
                         variable=self.no_decompile).pack(side="left", padx=12)
         ttk.Button(actions, text="Settings…", command=self.open_settings).pack(side="right")
+        self.btn_bootstrap = ttk.Button(
+            actions, text="Install toolchain", command=self.do_bootstrap)
+        self.btn_bootstrap.pack(side="right", padx=4)
 
         self.progress = ttk.Progressbar(self, mode="indeterminate")
         self.progress.pack(fill="x", **pad)
@@ -124,8 +127,8 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
             self.sdk_label.configure(foreground="#0a6")
         else:
             self.sdk_var.set(
-                "Android toolchain: NOT FOUND - set ANDROID_HOME to build an APK "
-                "(Windows: scripts\\bootstrap_android.ps1)"
+                "Android toolchain: NOT FOUND - click 'Install toolchain' to "
+                "auto-download a JDK + Android SDK/NDK"
             )
             self.sdk_label.configure(foreground="#a00")
 
@@ -221,6 +224,8 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
                     self._busy(False)
                 elif kind == "refresh_runtime":
                     self._refresh_runtime_status()
+                elif kind == "refresh_sdk":
+                    self._refresh_sdk_status()
         except queue.Empty:
             pass
         self.after(100, self._drain_queue)
@@ -231,6 +236,24 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
             messagebox.showwarning("PortAgent", "Choose a game folder first.")
             return False
         return True
+
+    def do_bootstrap(self) -> None:
+        from portagent import bootstrap as bs
+
+        def task() -> None:
+            res = bs.bootstrap(progress=self._progress)
+            if res.ok:
+                bs.apply_env(res)
+                self._queue.put(("log", f"toolchain ready: {res.android_home}"))
+                if res.ndk_home:
+                    self._queue.put(("log", f"ndk: {res.ndk_home}"))
+                self._queue.put(("refresh_sdk", None))
+            else:
+                self._queue.put(("log", f"bootstrap incomplete: {res.message}"))
+                for step, state in res.steps.items():
+                    self._queue.put(("log", f"  {step}: {state}"))
+
+        self._run("BOOTSTRAP", task)
 
     def do_analyze(self) -> None:
         if not self._require_game():
