@@ -176,7 +176,21 @@ def run_port(
 
     failed_steps = [k for k, v in result.steps.items() if str(v).startswith("fail")]
     if result.status == "ok":
-        message = "installable signed APK produced"
+        if runtime.runtime_class == "wine_dxvk" and result.runtime_bundled:
+            message = (
+                "emulation container built: installable signed APK with the ARM64 "
+                "Box64 + Wine + DXVK stack and the game payload. Launches the title "
+                "on an arm64-v8a device; frame-accurate equivalence is not verified "
+                "without an on-device oracle trace."
+            )
+        elif runtime.runtime_class == "wine_dxvk":
+            message = (
+                "APK built, but the ARM64 runtime stack is NOT installed, so the "
+                "container cannot launch the game. Run "
+                "`python -m portagent.runtimes` to fetch Box64 + Wine + DXVK, then rebuild."
+            )
+        else:
+            message = "installable signed APK produced"
     elif result.status == "partial":
         message = "APK built but not fully signed; see logs"
     else:

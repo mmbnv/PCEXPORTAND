@@ -19,18 +19,24 @@ from .models import (
 )
 
 # Base applicability: which strategies are even in the running for an engine.
+# Without original sources the *only* route that can execute a shipped x86/x64
+# build on ARM64 is the Box64 + Wine + DXVK container, so every engine lists it.
 ENGINE_STRATEGIES: dict[Engine, list[PortStrategy]] = {
-    Engine.UNITY: [PortStrategy.UNITY_IL2CPP_NDK, PortStrategy.UNITY_MONO_MONOEMBED],
-    Engine.UNREAL: [PortStrategy.UNREAL_ANDROID_NDK],
-    Engine.GODOT: [PortStrategy.GODOT_ANDROID],
-    Engine.DOTNET: [PortStrategy.DOTNET_TRANSPILE, PortStrategy.DOTNET_MONO_EMBED],
+    Engine.UNITY: [PortStrategy.WINE_WINLATOR, PortStrategy.UNITY_IL2CPP_NDK,
+                   PortStrategy.UNITY_MONO_MONOEMBED],
+    Engine.UNREAL: [PortStrategy.WINE_WINLATOR, PortStrategy.UNREAL_ANDROID_NDK],
+    Engine.GODOT: [PortStrategy.WINE_WINLATOR, PortStrategy.GODOT_ANDROID],
+    Engine.DOTNET: [PortStrategy.WINE_WINLATOR, PortStrategy.DOTNET_TRANSPILE,
+                    PortStrategy.DOTNET_MONO_EMBED],
     Engine.JAVA: [PortStrategy.JAVA_DEX_REPACK],
-    Engine.GAMEMAKER: [PortStrategy.GM_HTML5_WRAP, PortStrategy.NATIVE_DBT_BOX64],
-    Engine.RPGMAKER: [PortStrategy.RM_ENGINE_PORT],
-    Engine.SOURCE: [PortStrategy.NATIVE_DBT_BOX64, PortStrategy.WINE_WINLATOR],
-    Engine.CUSTOM_NATIVE: [PortStrategy.NATIVE_DBT_BOX64, PortStrategy.WINE_WINLATOR],
-    Engine.PYTHON: [PortStrategy.RM_ENGINE_PORT, PortStrategy.NATIVE_DBT_BOX64],
-    Engine.UNKNOWN: [PortStrategy.NATIVE_DBT_BOX64, PortStrategy.WINE_WINLATOR],
+    Engine.GAMEMAKER: [PortStrategy.WINE_WINLATOR, PortStrategy.GM_HTML5_WRAP,
+                       PortStrategy.NATIVE_DBT_BOX64],
+    Engine.RPGMAKER: [PortStrategy.WINE_WINLATOR, PortStrategy.RM_ENGINE_PORT],
+    Engine.SOURCE: [PortStrategy.WINE_WINLATOR, PortStrategy.NATIVE_DBT_BOX64],
+    Engine.CUSTOM_NATIVE: [PortStrategy.WINE_WINLATOR, PortStrategy.NATIVE_DBT_BOX64],
+    Engine.PYTHON: [PortStrategy.WINE_WINLATOR, PortStrategy.RM_ENGINE_PORT,
+                    PortStrategy.NATIVE_DBT_BOX64],
+    Engine.UNKNOWN: [PortStrategy.WINE_WINLATOR, PortStrategy.NATIVE_DBT_BOX64],
 }
 
 TOOL_REQUIREMENTS: dict[PortStrategy, list[str]] = {
@@ -43,8 +49,8 @@ TOOL_REQUIREMENTS: dict[PortStrategy, list[str]] = {
     PortStrategy.JAVA_DEX_REPACK: ["jadx", "apktool", "gradle"],
     PortStrategy.GM_HTML5_WRAP: ["gamemaker-html5", "webview"],
     PortStrategy.RM_ENGINE_PORT: ["runtime-port"],
-    PortStrategy.NATIVE_DBT_BOX64: ["box64", "wine", "ndk"],
-    PortStrategy.WINE_WINLATOR: ["wine", "box64", "dxvk", "ndk"],
+    PortStrategy.NATIVE_DBT_BOX64: ["box64", "wine", "dxvk"],
+    PortStrategy.WINE_WINLATOR: ["box64", "wine", "dxvk"],
 }
 
 EFFORT: dict[PortStrategy, str] = {

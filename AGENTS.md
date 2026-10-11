@@ -12,13 +12,21 @@ and docs (`docs/`).
 
 ## Environment facts (verified)
 
-- Base image: Debian 13, Python 3.13, `sudo` works, network works.
+- Base image: Debian 13, Python 3.13, network works. `sudo`/`apt` may be
+  unavailable in some sandboxes - rely on `pip` and downloadable binaries.
 - No `/dev/kvm` → Android emulator is not usable here.
 - Cross compilers installed for tests: `mingw-w64` (x86/x86_64 PE),
   `gcc-aarch64-linux-gnu` (ARM64 ELF). Install with
   `sudo apt-get install -y mingw-w64 gcc-aarch64-linux-gnu`.
 - Android SDK/NDK are **not** installed by default; run
   `scripts/bootstrap_android.sh` (large download) if you need real APKs.
+- To validate the ARM64 launch chain without a device: extract `qemu-aarch64`
+  from the `qemu-user-static` `.deb` (no root) and run
+  `qemu-aarch64 -L <rootfs> <rootfs>/usr/lib/ld-linux-aarch64.so.1 <box64> ...`.
+  `loader -> box64 -> wine --version` prints `wine-10.10`. `wineboot`/PE init
+  then hits `virtual_alloc_first_teb ... c0000018`, which is a **qemu artifact**
+  (qemu reserves low address space); on a real arm64-v8a device Box64 runs
+  natively and the game starts.
 
 ## Commands
 
@@ -61,7 +69,10 @@ python -m portagent memory --memory <db>
 - `portagent/translator.py` – API mapping + generated C shims.
 - `portagent/decompiler.py` – real code recovery (monodis/objdump/jadx/Il2CppDumper).
 - `portagent/optimizer.py` – Android tuning (ABI/backend/heap/DBT) + env.
-- `portagent/runtime.py` – runtime-class planning + payload bundling.
+- `portagent/runtime.py` - runtime-class planning + payload bundling.
+- `portagent/runtimes.py` - fetches/unpacks the pinned ARM64 stack
+  (Box64 + Wine + DXVK + Turnip) from Winlator 11.2.0 into
+  `~/.portagent-tools/runtime/wine_dxvk/`; verifies SHA-256 + ELF arch.
 - `portagent/packager.py` – real signed APK (aapt2/javac/d8/zipalign/apksigner).
 - `portagent/builder.py` – Gradle/NDK scaffold + host compile (legacy path).
 - `portagent/verifier.py` – determinism + scene equivalence.
@@ -83,8 +94,16 @@ python -m portagent memory --memory <db>
   class + env) whenever a `RuntimeConfig` is passed. `PortActivity` generates a
   `launchRuntime()` that dispatches on `RUNTIME_CLASS`
   (`engine_native|mono_managed|dbt_box64|wine_dxvk`). Heavy ARM64 runtime
-  payloads (Box64/Wine/DXVK) are **not** vendored; `scripts/fetch_runtimes.sh`
-  installs them to `~/.portagent-tools/runtime/<class>/` and `RuntimeBundler`
-  copies whatever is present. Never fake a runtime being present.
+  payloads (Box64/Wine/DXVK) are **not** vendored:
+  `python -m portagent fetch-runtimes` (or `scripts/fetch_runtimes.sh`)
+  installs them to `~/.portagent-tools/runtime/wine_dxvk/` and
+  `RuntimeBundler` copies them to `assets/runtime/**`. Never fake a
+  runtime being present.
+- For source-less titles the runtime layer always picks `wine_dxvk`. The
+  generated `PortActivity` (a) launches Box64 through the shipped aarch64
+  loader (box64's own PT_INTERP points at Winlator's package), (b) sets
+  `WINELOADERNOEXEC=1` + `WINEDLLPATH` (the wine stub execs a build-path
+  preloader that we do not ship), (c) stages dxvk/vkd3d DLLs into the prefix
+  with `WINEDLLOVERRIDES=...=n,b`, and (d) rewrites the Turnip ICD path.
 - Tests for the packager are skipped (not faked) when the SDK is absent.
 - `*.apk` is git-ignored — never commit build outputs.

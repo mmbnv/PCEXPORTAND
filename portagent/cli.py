@@ -228,6 +228,24 @@ def _cmd_portall(args: argparse.Namespace) -> int:
     return 0 if ok == len(rows) else 1
 
 
+def _cmd_fetch_runtimes(args: argparse.Namespace) -> int:
+    from . import runtimes
+
+    def progress(stage: str, msg: str) -> None:
+        print(f"[{stage}] {msg}", flush=True)
+
+    res = runtimes.fetch_runtimes(force=args.force, progress=progress)
+    import json
+
+    print(json.dumps(res.to_dict(), indent=2, ensure_ascii=False))
+    if res.ok:
+        print("\nRuntime ready. Now build a port: python -m portagent port <game>")
+        return 0
+    print("\nRuntime NOT fully installed; see checks/logs above.", file=sys.stderr)
+    return 1
+
+
+
 def _cmd_memory(args: argparse.Namespace) -> int:
     from .memory import Memory
 
@@ -305,6 +323,13 @@ def build_parser() -> argparse.ArgumentParser:
     gu = sub.add_parser("gui", help="open the desktop GUI (Tkinter window)")
     gu.add_argument("--game", default=None, help="preselect a game folder")
     gu.set_defaults(func=_cmd_gui)
+
+    fr = sub.add_parser(
+        "fetch-runtimes",
+        help="download the ARM64 Box64 + Wine + DXVK stack (~475 MB, once)",
+    )
+    fr.add_argument("--force", action="store_true", help="re-unpack even if present")
+    fr.set_defaults(func=_cmd_fetch_runtimes)
     return p
 
 

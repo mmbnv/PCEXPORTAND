@@ -218,6 +218,17 @@ class Session:
         print(_wrap("Building APK ...", C.BOLD))
         print(_wrap(f"  work dir: {self.work}", C.DIM))
         self.work.mkdir(parents=True, exist_ok=True)
+        from portagent import runtimes
+
+        if not runtimes.runtime_ready():
+            print(_wrap("  ARM64 runtime missing - fetching it once (~475 MB, "
+                        "Box64 + Wine + DXVK, cached in ~/.portagent-tools) ...", C.DIM))
+            fetched = runtimes.fetch_runtimes(progress=self._progress)
+            if fetched.ok:
+                print(_wrap(f"  runtime ready: {fetched.box64_version}", C.GREEN))
+            else:
+                print(_wrap("  runtime fetch incomplete - APK will build but cannot "
+                            "launch the game", C.YELLOW))
         try:
             self.summary = launcher.run_port(
                 self.game, self.work, decompile=not self.no_decompile,

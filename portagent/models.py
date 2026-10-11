@@ -100,7 +100,11 @@ class PortStrategy(str, enum.Enum):
 
 #: Strategies that are strictly more faithful than pure emulation.  The policy
 #: tries them in order and only falls back to DBT/Wine when nothing else fits.
+#: ``wine_winlator`` leads because, without original sources, it is the only
+#: route that can actually execute a shipped x86/x64 build on ARM64.
 STRATEGY_PREFERENCE: tuple[PortStrategy, ...] = (
+    PortStrategy.WINE_WINLATOR,
+    PortStrategy.NATIVE_DBT_BOX64,
     PortStrategy.UNITY_IL2CPP_NDK,
     PortStrategy.UNITY_MONO_MONOEMBED,
     PortStrategy.UNREAL_ANDROID_NDK,
@@ -110,8 +114,6 @@ STRATEGY_PREFERENCE: tuple[PortStrategy, ...] = (
     PortStrategy.JAVA_DEX_REPACK,
     PortStrategy.GM_HTML5_WRAP,
     PortStrategy.RM_ENGINE_PORT,
-    PortStrategy.NATIVE_DBT_BOX64,
-    PortStrategy.WINE_WINLATOR,
 )
 
 
