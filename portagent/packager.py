@@ -75,6 +75,20 @@ def _run(cmd: list[str], cwd: str | Path | None = None, timeout: int = 1800) -> 
         return 124, f"timeout after {timeout}s: {' '.join(cmd[:3])}"
 
 
+def _tool_in(directory: Path, name: str) -> str | None:
+    """Return the platform-appropriate executable path for ``name``, or ``None``.
+
+    Android build-tools ship as bare binaries on Linux/macOS but as ``.exe`` /
+    ``.bat`` on Windows, so a plain ``is_file("aapt2")`` check silently fails
+    there. Probe the common extensions in order.
+    """
+    for cand in (name, f"{name}.exe", f"{name}.bat", f"{name}.cmd", f"{name}.sh"):
+        p = directory / cand
+        if p.is_file():
+            return str(p)
+    return None
+
+
 def find_android_toolchain() -> dict[str, str] | None:
     """Locate build-tools + android.jar + NDK, or return ``None``."""
     sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
@@ -86,17 +100,17 @@ def find_android_toolchain() -> dict[str, str] | None:
         return None
     # Highest versioned build-tools directory that has the tools we need.
     for bt in sorted(bt_root.iterdir(), reverse=True):
-        aapt2 = bt / "aapt2"
-        d8 = bt / "d8"
-        if aapt2.is_file() and d8.is_file():
+        aapt2 = _tool_in(bt, "aapt2")
+        d8 = _tool_in(bt, "d8")
+        if aapt2 and d8:
             jars = sorted((sdk_p / "platforms").glob("android-*/android.jar"), reverse=True)
             if not jars:
                 continue
             tools = {
-                "aapt2": str(aapt2),
-                "d8": str(d8),
-                "zipalign": str(bt / "zipalign"),
-                "apksigner": str(bt / "apksigner"),
+                "aapt2": aapt2,
+                "d8": d8,
+                "zipalign": _tool_in(bt, "zipalign") or str(bt / "zipalign"),
+                "apksigner": _tool_in(bt, "apksigner") or str(bt / "apksigner"),
                 "android_jar": str(jars[0]),
                 "build_tools": str(bt),
             }
@@ -507,7 +521,10 @@ class ApkPackager:
             res.steps["native"] = "skipped (no NDK)"
             return []
         prebuilt = Path(ndk) / "toolchains/llvm/prebuilt"
-        cands = sorted(prebuilt.glob("*/bin/clang"))
+        cands = sorted(
+            p for pat in ("*/bin/clang", "*/bin/clang.exe", "*/bin/clang.cmd")
+            for p in prebuilt.glob(pat)
+        )
         if not cands:
             res.steps["native"] = "skipped (no clang)"
             return []

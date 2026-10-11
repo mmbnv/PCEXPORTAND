@@ -83,7 +83,7 @@ def run_port(
     """
     from .decompiler import Decompiler
     from .optimizer import Optimizer
-    from .packager import ApkPackager
+    from .packager import ApkPackager, find_android_toolchain
     from .planner import Planner
     from .runtime import RuntimePlanner
     from .translator import Translator
@@ -93,6 +93,28 @@ def run_port(
         raise FileNotFoundError(f"no such file or directory: {game}")
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+
+    toolchain = find_android_toolchain()
+    if toolchain is None:
+        # Fail fast with an actionable reason instead of a generic build error.
+        msg = (
+            "Android SDK/NDK not found. Set ANDROID_HOME (or ANDROID_SDK_ROOT) to a "
+            "folder containing build-tools/ and platforms/android-*/android.jar, then "
+            "retry. On Windows run scripts/bootstrap_android.ps1 first."
+        )
+        _emit(progress, "EXECUTE", msg)
+        return {
+            "status": "fail",
+            "engine": None,
+            "apk": None,
+            "message": msg,
+            "steps": {"toolchain": "missing"},
+            "logs": [msg],
+            "timings": {},
+            "environment": environment(),
+        }
+    _emit(progress, "EXECUTE",
+          f"Android toolchain: {toolchain.get('build_tools')}")
 
     timings: dict[str, float] = {}
     t0 = time.time()
@@ -152,6 +174,18 @@ def run_port(
 
     _emit(progress, "VERIFY", "signed=%s aligned=%s" % (result.signed, result.aligned))
 
+    failed_steps = [k for k, v in result.steps.items() if str(v).startswith("fail")]
+    if result.status == "ok":
+        message = "installable signed APK produced"
+    elif result.status == "partial":
+        message = "APK built but not fully signed; see logs"
+    else:
+        message = (
+            f"APK build failed at: {', '.join(failed_steps)}"
+            if failed_steps
+            else "APK build failed; see logs (is ANDROID_HOME set?)"
+        )
+
     summary = {
         "status": "ok" if result.status == "ok" else result.status,
         "engine": profile.engine.value,
@@ -167,15 +201,10 @@ def run_port(
         "decompile": decompile_result.to_dict() if decompile_result else {"status": "skipped"},
         "optimization": plan.to_dict(),
         "steps": result.steps,
+        "logs": result.logs[-20:],
         "timings": timings,
         "environment": environment(),
-        "message": (
-            "installable signed APK produced"
-            if result.status == "ok"
-            else "APK built but not fully signed; see logs"
-            if result.status == "partial"
-            else "APK build failed; see logs (is ANDROID_HOME set?)"
-        ),
+        "message": message,
     }
     _emit(progress, "VERIFY", summary["message"])
     return summary
@@ -246,6 +275,14 @@ def format_markdown(report: dict[str, Any]) -> str:
         lines.append("- Blockers:")
         for b in s["blockers"]:
             lines.append(f"  - {b.get('reason', b)}")
+    if s.get("steps"):
+        lines.append(f"- Steps: {json.dumps(s['steps'])}")
+    if s.get("status") == "fail" and s.get("logs"):
+        lines += ["", "## Failure logs", ""]
+        for line in s["logs"][-10:]:
+            lines.append("```")
+            lines.append(str(line))
+            lines.append("```")
     if s.get("timings"):
         lines.append(f"- Timings (s): {json.dumps(s['timings'])}")
     if env:

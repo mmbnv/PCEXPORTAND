@@ -354,9 +354,20 @@ python -m portagent run /path/to/game --work-dir ./run --max-iterations 6
 ## 7. Сборка настоящего APK (Android SDK/NDK)
 
 ```bash
-scripts/bootstrap_android.sh          # JDK + Android SDK + NDK + Gradle
+scripts/bootstrap_android.sh          # JDK + Android SDK + NDK + Gradle (Linux/macOS)
 scripts/bootstrap_android.sh --full   # ещё Ghidra, jadx, apktool, Il2CppDumper
 ```
+
+На Windows (PowerShell, из корня репозитория):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap_android.ps1
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap_android.ps1 -Full
+```
+
+Скрипт скачает JDK (через winget/choco, если есть), Android command-line tools,
+build-tools, platform, NDK и cmake, а затем **напечатает готовые команды**
+`setx ANDROID_HOME …`. Выполните их, перезапустите терминал — и можно собирать.
 
 После установки добавьте в окружение (версию NDK посмотрите в
 `$ANDROID_HOME/ndk/`):
@@ -496,6 +507,20 @@ python -m portagent run /path/to/game --work-dir ./run
 Либо положите рядом реальный файл с эталонной трассой (см. раздел 6).
 Отсутствующий `--oracle` теперь даёт аккуратную ошибку с кодом выхода 2, а не
 трейсбек.
+
+**`APK build failed; see logs (is ANDROID_HOME set?)`, `signed=False`,
+`apk=None`.** Это самая частая ошибка на Windows: не установлен Android
+SDK/NDK, поэтому собрать APK нечем. Установите инструменты одной командой:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap_android.ps1
+```
+
+Скрипт в конце напечатает строки `setx ANDROID_HOME …` — выполните их,
+**перезапустите терминал**, затем запустите `python run.py` снова. В меню и в
+окне строка `sdk:` теперь сразу показывает `ready` или `MISSING`, так что
+видно ещё до сборки. Пункт 8 (Show environment / tools) печатает, что именно
+не найдено. Разведка (Analyze) работает и без SDK.
 
 **Порт вернул `inconclusive`.** Не хватило итераций — увеличьте
 `--max-iterations` или запустите повторно: правила в `memory.sqlite`

@@ -56,9 +56,18 @@ No third-party Python packages are required (stdlib only). `port` and real APK
 building additionally need the Android SDK/NDK; install it with:
 
 ```bash
-scripts/bootstrap_android.sh          # JDK + Android SDK + NDK + Gradle
+scripts/bootstrap_android.sh          # JDK + Android SDK + NDK + Gradle (Linux/macOS)
 scripts/bootstrap_android.sh --full   # + Ghidra, jadx, apktool, Il2CppDumper
 ```
+
+On Windows (PowerShell, from the repo root):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap_android.ps1
+```
+
+The script prints the `setx ANDROID_HOME …` lines to run. The menu and GUI both
+show an `sdk:` status line (`ready` / `MISSING`) so you know before building.
 
 ## Pilot
 

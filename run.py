@@ -132,6 +132,11 @@ class Session:
         self.profile: dict | None = None
         self.summary: dict | None = None
 
+    def toolchain_ready(self) -> bool:
+        from portagent.packager import find_android_toolchain
+
+        return find_android_toolchain() is not None
+
     # -- path input -------------------------------------------------------
     def choose_game(self) -> None:
         print()
@@ -199,6 +204,16 @@ class Session:
         if not self.game:
             print(_wrap("Pick a game first (option 1).", C.YELLOW))
             return
+        if not self.toolchain_ready():
+            print()
+            print(_wrap("Android SDK/NDK not found — a real APK cannot be built yet.", C.RED))
+            print("Install it, then set ANDROID_HOME (or ANDROID_SDK_ROOT):")
+            print(_wrap("  Windows:  powershell -ExecutionPolicy Bypass "
+                        "-File scripts\\bootstrap_android.ps1", C.CYAN))
+            print(_wrap("  Linux/macOS:  scripts/bootstrap_android.sh", C.CYAN))
+            print(_wrap("Option 8 shows exactly what is missing. Analysis (option 2) "
+                        "still works without the SDK.", C.DIM))
+            return
         print()
         print(_wrap("Building APK ...", C.BOLD))
         print(_wrap(f"  work dir: {self.work}", C.DIM))
@@ -255,6 +270,11 @@ class Session:
                   f"signed={s.get('signed')} aligned={s.get('aligned')}")
         if s.get("message"):
             print(f"  message       : {s['message']}")
+        if s.get("steps"):
+            print(f"  steps         : {s['steps']}")
+        if s.get("status") == "fail":
+            for line in (s.get("logs") or [])[-5:]:
+                print(f"    {_wrap('log', C.RED)}: {line}")
         if s.get("timings"):
             print(f"  timings (s)   : {s['timings']}")
         _hr()
@@ -319,6 +339,7 @@ MENU = """
 {title}
   game : {game}
   work : {work}
+  sdk  : {sdk}
 {hr}
   1. Choose game folder / installer
   2. Analyze
@@ -348,10 +369,13 @@ def main(argv: list[str] | None = None) -> int:
 
     while True:
         _title()
+        sdk = (_wrap("ready", C.GREEN) if sess.toolchain_ready()
+               else _wrap("MISSING - set ANDROID_HOME (see option 8)", C.RED))
         print(MENU.format(
             title=_wrap("Main menu", C.BOLD),
             game=sess.game or _wrap("(none selected)", C.YELLOW),
             work=sess.work,
+            sdk=sdk,
             hr=_wrap("-" * 68, C.DIM),
         ))
         choice = _ask("Choose [0-8] > ")

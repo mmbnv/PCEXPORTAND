@@ -70,6 +70,34 @@ class ToolchainTests(unittest.TestCase):
             if saved2:
                 os.environ["ANDROID_SDK_ROOT"] = saved2
 
+    def test_windows_style_tool_names_are_found(self):
+        # Windows build-tools are aapt2.exe / d8.bat, not bare names.
+        with tempfile.TemporaryDirectory() as tmp:
+            sdk = Path(tmp)
+            bt = sdk / "build-tools" / "34.0.0"
+            (sdk / "platforms" / "android-34").mkdir(parents=True)
+            (sdk / "platforms" / "android-34" / "android.jar").write_bytes(b"PK\x03\x04")
+            bt.mkdir(parents=True)
+            (bt / "aapt2.exe").write_bytes(b"")
+            (bt / "d8.bat").write_bytes(b"")
+            (bt / "zipalign.exe").write_bytes(b"")
+            (bt / "apksigner.bat").write_bytes(b"")
+            saved = os.environ.get("ANDROID_HOME")
+            os.environ["ANDROID_HOME"] = str(sdk)
+            os.environ.pop("ANDROID_SDK_ROOT", None)
+            try:
+                tools = find_android_toolchain()
+            finally:
+                if saved is None:
+                    os.environ.pop("ANDROID_HOME", None)
+                else:
+                    os.environ["ANDROID_HOME"] = saved
+            self.assertIsNotNone(tools)
+            self.assertTrue(tools["aapt2"].endswith("aapt2.exe"))
+            self.assertTrue(tools["d8"].endswith("d8.bat"))
+            self.assertTrue(tools["zipalign"].endswith("zipalign.exe"))
+            self.assertTrue(tools["apksigner"].endswith("apksigner.bat"))
+
 
 @unittest.skipUnless(find_android_toolchain() is not None,
                      "Android SDK not installed (set ANDROID_HOME)")

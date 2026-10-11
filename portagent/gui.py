@@ -82,6 +82,11 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
         self.progress = ttk.Progressbar(self, mode="indeterminate")
         self.progress.pack(fill="x", **pad)
 
+        self.sdk_var = tk.StringVar(value="")
+        self.sdk_label = ttk.Label(self, textvariable=self.sdk_var, foreground="#a00")
+        self.sdk_label.pack(anchor="w", padx=10)
+        self._refresh_sdk_status()
+
         stats = ttk.LabelFrame(self, text="Stats")
         stats.pack(fill="x", **pad)
         self.stats_text = tk.Text(stats, height=9, wrap="word", state="disabled",
@@ -105,6 +110,20 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
         ttk.Button(bottom, text="Quit", command=self.destroy).pack(side="right")
 
     # -- helpers ----------------------------------------------------------
+    def _refresh_sdk_status(self) -> None:
+        from portagent.packager import find_android_toolchain
+
+        tc = find_android_toolchain()
+        if tc:
+            self.sdk_var.set(f"Android toolchain: ready ({tc.get('build_tools', '')})")
+            self.sdk_label.configure(foreground="#0a6")
+        else:
+            self.sdk_var.set(
+                "Android toolchain: NOT FOUND - set ANDROID_HOME to build an APK "
+                "(Windows: scripts\\bootstrap_android.ps1)"
+            )
+            self.sdk_label.configure(foreground="#a00")
+
     def log_line(self, text: str) -> None:
         self.log.configure(state="normal")
         self.log.insert("end", text + "\n")
@@ -209,6 +228,7 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
     def do_build(self) -> None:
         if not self._require_game():
             return
+        self._refresh_sdk_status()
         self.work.mkdir(parents=True, exist_ok=True)
 
         def task() -> None:

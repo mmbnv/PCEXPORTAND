@@ -52,7 +52,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 def _cmd_port(args: argparse.Namespace) -> int:
     from .decompiler import Decompiler
     from .optimizer import Optimizer
-    from .packager import ApkPackager
+    from .packager import ApkPackager, find_android_toolchain
     from .planner import Planner
     from .runtime import RuntimePlanner
     from .translator import Translator
@@ -62,6 +62,21 @@ def _cmd_port(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"no such file or directory: {game}")
     work = Path(args.work_dir)
     work.mkdir(parents=True, exist_ok=True)
+
+    toolchain = find_android_toolchain()
+    if toolchain is None:
+        out = {
+            "status": "fail",
+            "apk": None,
+            "steps": {"toolchain": "missing"},
+            "message": (
+                "Android SDK/NDK not found. Set ANDROID_HOME (or ANDROID_SDK_ROOT) to a "
+                "folder with build-tools/ and platforms/android-*/android.jar, then retry. "
+                "On Windows run scripts/bootstrap_android.ps1 first."
+            ),
+        }
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 2
 
     profile = Analyzer(game).analyze()
     if not profile.feasible:
