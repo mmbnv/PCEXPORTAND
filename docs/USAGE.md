@@ -66,6 +66,53 @@ python -m portagent run /path/to/game --work-dir ./run
 python -m portagent memory --memory ./run/memory.sqlite
 ```
 
+### Главная команда: `port` (одна команда → APK)
+
+```powershell
+python -m portagent port "C:\Games\MyGame" -o MyGame.apk
+```
+
+Она делает весь конвейер сразу: `ANALYZE → CHOOSE → TRANSLATE → BUILD`,
+собирает **настоящий подписанный APK** и оптимизирует его под телефон.
+
+Результат — JSON, где главное поле `apk`:
+
+```json
+{
+  "status": "ok",
+  "engine": "godot",
+  "strategy": "godot_android",
+  "apk": "MyGame.apk",
+  "apk_size": 320615,
+  "signed": true,
+  "aligned": true,
+  "abis": ["arm64-v8a"],
+  "assets": {"files": 8, "bytes": 291304},
+  "optimization": {"graphics_backend": "vulkan", "heap_mb": 512, "dbt": false},
+  "steps": {"aapt2_compile": "ok", "aapt2_link": "ok", "javac": "ok",
+            "d8": "ok", "native_arm64-v8a": "ok", "assemble": "ok",
+            "zipalign": "ok", "sign": "ok"}
+}
+```
+
+Что внутри APK:
+
+```
+AndroidManifest.xml             ландшафтная активность-лаунчер
+classes.dex                     слой запуска (PortActivity)
+lib/arm64-v8a/libportagent.so   собранные NDK-прослойки совместимости
+assets/game/**                  вся игра; распаковывается при первом запуске
+```
+
+APK проходит `apksigner verify` (схемы v2 и v3) и `zipalign -c`.
+
+**Что это честно делает:** создаёт валидное устанавливаемое приложение,
+которое несёт игру и слой совместимости, и оптимизирует его под телефон.
+**Чего ещё не делает:** не пересобирает произвольную игровую логику из
+машинного кода — это следующий этап (связка Decompiler → Translator).
+
+Требуется Android SDK/NDK — поставьте его скриптом из раздела 7.
+
 В качестве `game` можно передать **папку** установленной игры или **один файл**
 установщика.
 
@@ -241,17 +288,33 @@ scripts/bootstrap_android.sh          # JDK + Android SDK + NDK + Gradle
 scripts/bootstrap_android.sh --full   # ещё Ghidra, jadx, apktool, Il2CppDumper
 ```
 
-После установки добавьте в окружение:
+После установки добавьте в окружение (версию NDK посмотрите в
+`$ANDROID_HOME/ndk/`):
 
 ```bash
 export ANDROID_HOME="$HOME/.portagent-tools/android-sdk"
-export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
 export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools"
 ```
 
-Теперь `run` сможет собрать `arm64-v8a` и вызвать `gradle assembleDebug`. Если
-SDK нет — сборка просто помечается `partial` (собирается только host-версия),
-и это **не** считается успехом.
+Проверить, что всё на месте:
+
+```bash
+python -c "from portagent.packager import find_android_toolchain as f; print(f())"
+```
+
+Теперь `port` (и `run`) соберут настоящий подписанный APK. Если SDK нет —
+сборка помечается `partial`/`fail` и это **не** считается успехом.
+
+Сборка APK идёт **без Gradle и без сети**: напрямую `aapt2 → javac → d8 →
+zipalign → apksigner`, поэтому работает даже в офлайн-контейнере.
+
+Проверить готовый APK вручную:
+
+```bash
+$ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose MyGame.apk
+$ANDROID_HOME/build-tools/34.0.0/zipalign -c 4 MyGame.apk && echo aligned
+```
 
 ---
 
@@ -358,7 +421,9 @@ Godot, уже-ARM64 ELF и игру с анти-читом уровня ядра
 
 - Эквивалентность доказуема только относительно эталона; для всех игр сразу —
   нет (теорема Райса).
-- Полная автоматическая реконструкция кода — следующий этап.
+- `port` собирает **настоящий APK**, но это приложение-контейнер: игра +
+  слой совместимости. Автоматическая пересборка произвольной игровой логики из
+  машинного кода — следующий этап.
 - Полное решение проблемы остановки невозможно; цикл останавливается на
   успехе, жёстком блокере или исчерпании стратегий.
 - Динамическая трансляция (DBT) всегда медленнее нативного кода.

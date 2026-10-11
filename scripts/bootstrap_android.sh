@@ -26,10 +26,16 @@ log() { echo "[bootstrap] $*"; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# --- JDK 17 ---------------------------------------------------------------
+# --- JDK ------------------------------------------------------------------
 if ! need_cmd java; then
-  log "installing OpenJDK 17 ..."
-  sudo apt-get update -qq && sudo apt-get install -y -qq openjdk-17-jdk-headless unzip >/dev/null
+  log "installing a JDK ..."
+  sudo apt-get update -qq
+  for pkg in openjdk-17-jdk-headless openjdk-21-jdk-headless default-jdk-headless; do
+    if sudo apt-get install -y -qq "$pkg" unzip >/dev/null 2>&1; then
+      log "installed $pkg"
+      break
+    fi
+  done
 fi
 export JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}"
 log "JAVA_HOME=$JAVA_HOME"
@@ -54,10 +60,20 @@ export ANDROID_SDK_ROOT="$ANDROID_SDK"
 SDKMANAGER="$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager"
 if [ -x "$SDKMANAGER" ]; then
   yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK" --licenses >/dev/null 2>&1 || true
-  log "installing platform-tools, build-tools:$BT_VERSION, platforms;$PLATFORM, ndk;$NDK_VERSION, cmake ..."
+  log "installing platform-tools, build-tools:$BT_VERSION, platforms;$PLATFORM, ndk, cmake ..."
   "$SDKMANAGER" --sdk_root="$ANDROID_SDK" \
     "platform-tools" "build-tools;$BT_VERSION" "platforms;$PLATFORM" \
-    "ndk;$NDK_VERSION" "cmake;3.22.1" >/dev/null
+    "cmake;3.22.1" >/dev/null || true
+  # Install the requested NDK, or the newest available if that exact version is gone.
+  if ! "$SDKMANAGER" --sdk_root="$ANDROID_SDK" "ndk;$NDK_VERSION" >/dev/null 2>&1; then
+    latest_ndk="$("$SDKMANAGER" --sdk_root="$ANDROID_SDK" --list 2>/dev/null \
+      | sed -n 's/^ *\(ndk;[0-9.]*\) .*/\1/p' | tail -1)"
+    [ -n "$latest_ndk" ] && NDK_VERSION="${latest_ndk#ndk;}" \
+      && "$SDKMANAGER" --sdk_root="$ANDROID_SDK" "$latest_ndk" >/dev/null
+  fi
+fi
+if [ ! -d "$ANDROID_SDK/ndk/$NDK_VERSION" ]; then
+  for d in "$ANDROID_SDK"/ndk/*/; do [ -d "$d" ] && NDK_VERSION="$(basename "$d")"; done
 fi
 export ANDROID_NDK_HOME="$ANDROID_SDK/ndk/$NDK_VERSION"
 export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"

@@ -193,7 +193,7 @@ class Builder:
 
                 extern "C" JNIEXPORT jint JNICALL
                 Java_dev_portagent_port_MainActivity_nativeInit(JNIEnv*, jobject, jint w, jint h) {
-                    if (pagent_gfx_init(0, w, h) != 0) return -1;
+                    if (pagent_gfx_init("gles3", w, h) != 0) return -1;
                     if (pagent_audio_init(48000, 2) != 0) return -2;
                     return 0;
                 }

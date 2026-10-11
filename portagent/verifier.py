@@ -72,7 +72,8 @@ class Verifier:
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.oracle = oracle or {}
 
-    def verify(self, translated: dict, build_objects: list[str], build_status: str) -> VerifyResult:
+    def verify(self, translated: dict, build_objects: list[str], build_status: str,
+               apk_signed: bool | None = None) -> VerifyResult:
         res = VerifyResult()
         src = Path(translated["out_dir"])
         cc = self._cc()
@@ -86,7 +87,7 @@ class Verifier:
             return res
 
         res.checks["compiled"] = True
-        res.checks["apk_built"] = build_status == "ok"
+        res.checks["apk_built"] = bool(apk_signed) if apk_signed is not None else build_status == "ok"
 
         res.deterministic = self._check_determinism(cc, src, res)
         res.checks["deterministic"] = bool(res.deterministic)

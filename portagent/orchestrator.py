@@ -27,6 +27,8 @@ from .models import (
     write_json,
 )
 from .planner import Planner
+from .optimizer import Optimizer
+from .packager import ApkPackager
 from .translator import Translator
 from .verifier import Verifier, capture_oracle
 
@@ -104,6 +106,7 @@ class PortAgent:
         game_path = str(game_path)
         profile: GameProfile | None = None
         tried: set[PortStrategy] = set()
+        self._last_apk: str | None = None
 
         for iteration in range(1, self.max_iterations + 1):
             # --- ANALYZE ---
@@ -167,22 +170,42 @@ class PortAgent:
             # --- EXECUTE ---
             exec_dir = self.work_dir / f"iter{iteration}_{chosen.name.value}"
             translated = Translator(exec_dir).translate(profile, chosen.name)
+            plan = Optimizer().plan(profile, chosen.name)
             build = Builder(exec_dir).build(profile, chosen.name, translated)
+            pkg = ApkPackager(exec_dir / "apk").package(
+                game_path, translated, plan, app_label=Path(game_path).name
+            )
+            apk = pkg.apk or build.apk
+            if apk:
+                self._last_apk = apk
             build_path = write_json(exec_dir / "build_result.json", build.to_dict())
+            pkg_path = write_json(exec_dir / "package_result.json", pkg.to_dict())
+            if apk and pkg.apk:
+                build.apk = apk
+            exec_result = (
+                Result.OK if pkg.status == "ok"
+                else Result.PARTIAL if (pkg.status == "partial" or build.status in ("ok", "partial"))
+                else Result.FAIL
+            )
             self._emit(
                 StepName.EXECUTE,
                 inp=chosen.name.value,
-                action="translate APIs, generate shims, scaffold Gradle/NDK project, compile",
-                result=Result.OK if build.status == "ok" else (Result.PARTIAL if build.status == "partial" else Result.FAIL),
+                action="translate APIs, generate shims, optimize, build signed APK",
+                result=exec_result,
                 next_="VERIFY",
                 iteration=iteration,
-                artifacts=[str(build_path)] + build.objects + ([build.apk] if build.apk else []),
-                detail={"translated": translated["mapping"], "build": build.to_dict()},
+                artifacts=[str(build_path), str(pkg_path)] + build.objects + ([apk] if apk else []),
+                detail={
+                    "translated": translated["mapping"],
+                    "build": build.to_dict(),
+                    "package": pkg.to_dict(),
+                    "optimization": plan.to_dict(),
+                },
             )
 
             # --- VERIFY ---
             verify = Verifier(exec_dir, oracle=self.oracle).verify(
-                translated, build.objects, build.status
+                translated, build.objects, build.status, apk_signed=pkg.signed
             )
             verify_path = write_json(exec_dir / "verify_result.json", verify.to_dict())
             self._emit(
@@ -257,7 +280,7 @@ class PortAgent:
             iterations=iterations,
             strategy=strategy,
             profile=profile,
-            apk=apk,
+            apk=apk or getattr(self, "_last_apk", None),
             verify=verify,
             reports=[r.to_dict() for r in self.reports],
         )

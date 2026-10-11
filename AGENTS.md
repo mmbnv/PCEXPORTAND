@@ -52,7 +52,23 @@ python -m portagent memory --memory <db>
 - `portagent/analyzer.py` – engine/API/DRM detection + impossibility.
 - `portagent/planner.py` – strategy choice + memory weighting.
 - `portagent/translator.py` – API mapping + generated C shims.
-- `portagent/builder.py` – Gradle/NDK scaffold + compile + APK.
+- `portagent/optimizer.py` – Android tuning (ABI/backend/heap/DBT) + env.
+- `portagent/packager.py` – real signed APK (aapt2/javac/d8/zipalign/apksigner).
+- `portagent/builder.py` – Gradle/NDK scaffold + host compile (legacy path).
 - `portagent/verifier.py` – determinism + scene equivalence.
 - `portagent/memory.py` – SQLite experience store.
 - `portagent/orchestrator.py` – the loop and JSON step reports.
+
+## Packaging notes
+
+- The APK is built **without Gradle and without network**: `aapt2 compile` ->
+  `aapt2 link` -> `javac` -> `d8` -> zip -> `zipalign` -> `apksigner`. This is
+  deliberate so it works in an offline container.
+- Toolchain discovery is in `packager.find_android_toolchain()`; it reads
+  `ANDROID_HOME`/`ANDROID_SDK_ROOT` and picks the highest build-tools with both
+  `aapt2` and `d8`, plus any `platforms/android-*/android.jar`.
+- The game payload goes to `assets/game/**`; `PortActivity` (generated) unpacks
+  it on first run. The native shims compile to `lib/arm64-v8a/libportagent.so`
+  with NDK clang; the APK is still valid if the native step is skipped.
+- Tests for the packager are skipped (not faked) when the SDK is absent.
+- `*.apk` is git-ignored — never commit build outputs.
