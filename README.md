@@ -20,6 +20,21 @@ no Gradle and no network. The verifier compiles and runs a scene harness
 
 ## Quick start
 
+### Friendly app (no terminal commands to memorise)
+
+```bash
+python run.py            # interactive menu: pick a folder, Analyze, Build APK, get the report
+python run.py --gui      # the same thing as a real desktop window
+python -m portagent gui  # open the desktop GUI directly
+```
+
+The menu and GUI both let you: browse to a game folder or installer, run
+**Analyze**, **Build APK** or the **full loop**, and then copy/save a stats
+report to send back. The GUI needs Tkinter (on Debian/Ubuntu:
+`apt-get install python3-tk`); the menu works without it.
+
+### Command line
+
 ```bash
 # one command: game folder -> installable, signed APK
 python -m portagent port "C:\Games\MyGame" -o MyGame.apk

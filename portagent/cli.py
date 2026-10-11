@@ -234,6 +234,23 @@ def _cmd_memory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gui(args: argparse.Namespace) -> int:
+    try:
+        from .gui import launch, is_available
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: GUI unavailable: {exc}", file=sys.stderr)
+        return 2
+    if not is_available():
+        print(
+            "error: Tkinter is not available on this host.\n"
+            "hint: install it (e.g. 'apt-get install python3-tk') or use the "
+            "interactive menu: python run.py",
+            file=sys.stderr,
+        )
+        return 2
+    return launch()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="portagent", description="Iterative PC-game -> Android porter")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -269,6 +286,10 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--work-dir", default="portagent_all")
     pa.add_argument("--no-decompile", action="store_true", help="skip code recovery")
     pa.set_defaults(func=_cmd_portall)
+
+    gu = sub.add_parser("gui", help="open the desktop GUI (Tkinter window)")
+    gu.add_argument("--game", default=None, help="preselect a game folder")
+    gu.set_defaults(func=_cmd_gui)
     return p
 
 

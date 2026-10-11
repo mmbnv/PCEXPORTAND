@@ -11,6 +11,7 @@ dependencies = []
 
 [project.scripts]
 portagent = "portagent.cli:main"
+portagent-gui = "portagent.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["portagent*"]

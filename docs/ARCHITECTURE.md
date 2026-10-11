@@ -24,6 +24,28 @@
 [Output: APK + equivalence report]  or  [IMPOSSIBLE + evidence]
 ```
 
+## Entry points
+
+Three front ends drive the same pipeline through the shared, headless
+`portagent/launcher.py` API — so the CLI, the menu and the GUI never diverge:
+
+```
+ run.py (menu)  ─┐
+ portagent.gui  ─┼─►  portagent.launcher  ─►  Analyzer/Planner/Decompiler/
+ portagent.cli  ─┘                            Translator/Optimizer/Runtime/
+                                              Packager  (+ orchestrator loop)
+```
+
+- `launcher.analyze()` / `run_port()` / `run_loop()` — headless stages; each
+  takes an optional `progress(stage, message)` callback.
+- `launcher.environment()` — host/toolchain probe, embedded in every report.
+- `launcher.build_report()` / `format_markdown()` — a copy-paste stats report
+  (status, engine, strategy, runtime, APK, timings, environment) the user can
+  send back for support.
+- The GUI runs the long stages on a worker thread and marshals progress back to
+  Tk with `after()`, so the window never freezes. Tkinter is optional; when it is
+  missing the menu still works and `portagent gui` prints a clear hint.
+
 ## Loop
 
 1. **ANALYZE** – walk the folder, parse every PE/ELF (`portagent/parsers.py`),

@@ -25,6 +25,8 @@ and docs (`docs/`).
 ```bash
 python -m unittest discover -s tests -v     # full suite (builds real fixtures)
 python scripts/pilot.py --out pilot          # end-to-end pilot over fixtures
+python run.py                                # interactive menu (pick folder -> build -> report)
+python run.py --gui  |  python -m portagent gui   # desktop GUI (Tkinter, optional)
 python -m portagent analyze <game-folder>    # reconnaissance only
 python -m portagent run <game> --oracle o.json
 python -m portagent port <game> -o out.apk   # one command -> signed APK
@@ -51,6 +53,9 @@ python -m portagent memory --memory <db>
 ## Where things live
 
 - `portagent/parsers.py` – PE/ELF parsing.
+- `portagent/launcher.py` – shared headless API (analyze/run_port/run_loop/report) used by run.py & GUI.
+- `portagent/gui.py` – Tkinter desktop window (optional; degrades gracefully without Tk).
+- `run.py` (repo root) – interactive console menu + `--gui` shortcut.
 - `portagent/analyzer.py` – engine/API/DRM detection + impossibility.
 - `portagent/planner.py` – strategy choice + memory weighting.
 - `portagent/translator.py` – API mapping + generated C shims.
