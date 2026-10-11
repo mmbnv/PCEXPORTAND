@@ -49,6 +49,16 @@ class TestAnalyzer(unittest.TestCase):
         self.assertEqual(p.engine, Engine.GODOT)
         self.assertEqual(p.graphics_api, ApiKind.OPENGL)
 
+    def test_godot_dotnet(self):
+        p = Analyzer(self.fx["godot_dotnet"]).analyze()
+        self.assertEqual(p.engine, Engine.GODOT)
+        self.assertGreaterEqual(p.engine_confidence, 0.5)
+        # Steam is user-space, not a hard blocker.
+        self.assertTrue(any("steam" in d.lower() for d in p.drm))
+        self.assertTrue(p.feasible)
+        # The misleading "needs DBT/Wine" note must NOT appear for a known engine.
+        self.assertFalse(any("DBT" in n for n in p.notes))
+
     def test_anticheat_is_impossible(self):
         p = Analyzer(self.fx["anticheat_title"]).analyze()
         self.assertFalse(p.feasible)

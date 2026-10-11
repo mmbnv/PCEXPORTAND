@@ -184,6 +184,19 @@ def _godot(root: Path) -> None:
     _touch(root / "godot" / "project.binary", b"\x00" * 256)
 
 
+def _godot_dotnet(root: Path) -> None:
+    """Godot .NET (C#) title with a Steamworks wrapper and FMOD, like Slay the Spire 2."""
+    _write_exe(MINGW64, root / "GodotGame.exe", ["kernel32", "user32", "opengl32"],
+               "int main(void){return 0;}\n")
+    _touch(root / "Game.pck", b"GDPC" + b"\x00" * 512)
+    _touch(root / "GodotSharp.dll", b"\x4d\x5a" + b"\x00" * 1024)
+    # Managed .NET assemblies (PE with a CLI header, no native imports).
+    for name in ("sts2.dll", "System.Private.CoreLib.dll", "Steamworks.NET.dll"):
+        _touch(root / "data_sts2_windows_x86_64" / name, b"\x4d\x5a" + b"\x00" * 512)
+    _write_dll(MINGW64, root / "fmod.dll", "int FMOD_System_Create(void){return 0;}\n")
+    _write_dll(MINGW64, root / "steam_api64.dll", "int SteamAPI_Init(void){return 0;}\n")
+
+
 def _elf_arm64(root: Path) -> None:
     src = Path(root) / "lib" / "libengine.c"
     src.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +229,7 @@ def build_all(dest: str | Path) -> list[Fixture]:
     mk("rpgmaker_mv", _rpgmaker_mv, "rpgmaker", True, "RPG Maker MV web runtime")
     mk("anticheat_title", _anticheat_title, "custom_native", False, "kernel anti-cheat -> impossible")
     mk("godot", _godot, "godot", True, "Godot GLES title")
+    mk("godot_dotnet", _godot_dotnet, "godot", True, "Godot .NET (C#) + Steamworks + FMOD")
     mk("elf_arm64", _elf_arm64, "custom_native", True, "already-ARM64 ELF shared lib")
     return fixtures
 

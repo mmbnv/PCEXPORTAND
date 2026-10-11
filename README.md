@@ -44,8 +44,9 @@ python scripts/pilot.py --out pilot
 
 Runs the loop over a set of synthetic-but-real game folders (compiled with
 mingw-w64 / aarch64-linux-gnu-gcc) covering Unity IL2CPP, Unity Mono, a 32-bit
-D3D11 title, RPG Maker MV, Godot, an already-ARM64 ELF, and a kernel-anti-cheat
-title that must be declared impossible.
+D3D11 title, RPG Maker MV, Godot, Godot .NET (C#) with Steamworks, an
+already-ARM64 ELF, and a kernel-anti-cheat title that must be declared
+impossible.
 
 ## What is implemented vs. scaffolded
 

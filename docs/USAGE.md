@@ -95,6 +95,23 @@ python -m portagent analyze ".\MyGame"
 python -m portagent analyze "/home/user/Games/MyGame"
 ```
 
+> **Важно про вывод JSON.** Ключи в отчёте всегда **английские** (`engine`,
+> `arch`, `feasible`…). Если в консоли вы видите русские ключи вроде
+> «щекотливость» или «осуществимо» — это не PortAgent, а переводчик вашего
+> терминала/браузера, который перевёл вывод на лету. Чтобы получить чистый
+> отчёт, сохраните его в файл:
+>
+> ```powershell
+> python -m portagent analyze "C:\Games\MyGame" > report.json
+> ```
+>
+> ```bash
+> python -m portagent analyze /path/to/game > report.json
+> ```
+>
+> В Windows PowerShell перенаправление по умолчанию пишет в UTF-16; открывайте
+> файл в редакторе, который это понимает, либо выполните в cmd.exe.
+
 ---
 
 ## 4. Команда `analyze` — разведка

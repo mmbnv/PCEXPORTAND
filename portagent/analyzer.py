@@ -33,6 +33,8 @@ ENGINE_SIGNATURES: list[tuple[str, Engine, float, str]] = [
     ("/binaries/win64/", Engine.UNREAL, 0.8, "Unreal Win64 binaries folder"),
     ("/godot/", Engine.GODOT, 0.7, "Godot project folder"),
     ("godot.windows.", Engine.GODOT, 1.0, "Godot windows template executable"),
+    ("godotsharp.dll", Engine.GODOT, 1.0, "Godot .NET (GodotSharp) assemblies"),
+    (".pck", Engine.GODOT, 0.6, "Godot PCK resource pack"),
     ("/www/js/plugins/", Engine.RPGMAKER, 0.6, "RPG Maker MV/MZ web assets"),
     ("game.rgssad", Engine.RPGMAKER, 1.0, "RPG Maker XP/VX encrypted archive"),
     ("data/system.rvdata", Engine.RPGMAKER, 1.0, "RPG Maker VX data"),
@@ -217,6 +219,9 @@ class Analyzer:
         if profile.engine == Engine.UNKNOWN and profile.managed:
             profile.engine = Engine.DOTNET
             profile.engine_evidence.append("managed assemblies with no known engine")
+        elif profile.engine == Engine.UNKNOWN and profile.binaries:
+            profile.engine = Engine.CUSTOM_NATIVE
+            profile.engine_evidence.append("native binaries with no known engine markers")
         return profile
 
     # -- helpers ----------------------------------------------------------
@@ -345,8 +350,9 @@ class Analyzer:
             )
         # Unity IL2CPP is feasible; nothing to add.  Mark unknown native arch as soft.
         if profile.arch in ("x86", "x86_64") and not profile.managed and not profile.il2cpp:
-            profile.notes.append(
-                "x86/x86_64 native binary without engine metadata: likely needs DBT (Box64) or Wine"
-            )
+            if profile.engine in (Engine.UNKNOWN, Engine.CUSTOM_NATIVE):
+                profile.notes.append(
+                    "x86/x86_64 native binary without engine metadata: likely needs DBT (Box64) or Wine"
+                )
         if profile.arch == "unknown" and profile.engine == Engine.UNKNOWN:
             profile.notes.append("architecture and engine undetermined; analysis incomplete")
