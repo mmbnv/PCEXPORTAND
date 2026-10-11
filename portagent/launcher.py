@@ -268,6 +268,8 @@ def format_markdown(report: dict[str, Any]) -> str:
     rt = s.get("runtime") or {}
     if rt:
         lines.append(f"- Runtime class: {rt.get('runtime_class', '-')}")
+    if s.get("message"):
+        lines.append(f"- Reason: {s['message']}")
     if s.get("apk"):
         lines += [
             f"- APK: `{s.get('apk')}`",
@@ -295,5 +297,25 @@ def format_markdown(report: dict[str, Any]) -> str:
                   f"- Android toolchain: {'yes' if env.get('android_toolchain') else 'NO'}"]
         tools = env.get("tools", {})
         present = [k for k, v in tools.items() if v]
+        missing = [k for k, v in tools.items() if not v]
         lines.append(f"- Tools present: {', '.join(present) if present else 'none'}")
+        if missing:
+            lines.append(f"- Tools missing: {', '.join(missing)}")
+        if not env.get("android_toolchain"):
+            lines += ["", "## Next step", "",
+                      "No Android SDK/NDK was found, so no strategy can build an APK. "
+                      "Install the toolchain and re-run the loop:"]
+            if str(env.get("platform", "")).lower().startswith("windows"):
+                lines.append("")
+                lines.append("```powershell")
+                lines.append("powershell -ExecutionPolicy Bypass -File scripts\\bootstrap_android.ps1")
+                lines.append("```")
+            else:
+                lines.append("")
+                lines.append("```bash")
+                lines.append("scripts/bootstrap_android.sh")
+                lines.append("```")
+            lines.append("")
+            lines.append("Then set `ANDROID_HOME` (and `ANDROID_NDK_HOME`) and re-run. "
+                         "See `docs/USAGE.md` section 7 for a git-free install.")
     return "\n".join(lines) + "\n"
