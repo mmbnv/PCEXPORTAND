@@ -21,7 +21,16 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     oracle = None
     if args.oracle:
-        oracle = json.loads(Path(args.oracle).read_text(encoding="utf-8"))
+        path = Path(args.oracle)
+        if not path.is_file():
+            print(json.dumps({
+                "status": "error",
+                "message": f"oracle file not found: {path}",
+                "hint": "Run without --oracle to build and get UNKNOWN, or pass a real "
+                        "reference trace JSON (see docs/USAGE.md section on the oracle).",
+            }, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 2
+        oracle = json.loads(path.read_text(encoding="utf-8"))
     agent = PortAgent(
         work_dir=args.work_dir,
         memory_path=args.memory,

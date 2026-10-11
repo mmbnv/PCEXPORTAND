@@ -445,6 +445,33 @@ Godot, уже-ARM64 ELF и игру с анти-читом уровня ядра
 
 ## 11. Типовые вопросы
 
+**`invalid choice: 'port' (choose from 'analyze', 'run', 'memory')`.** Вы
+запускаете старую копию `portagent` — в ней нет команд `port`/`portall`. Команды
+добавлены в ветке `portagent-porter`; переключитесь на неё и обновите файлы:
+
+```bash
+git fetch origin
+git checkout portagent-porter
+git pull
+```
+
+Проверьте, что видите новые команды:
+
+```bash
+python -m portagent --help        # в списке должны быть port и portall
+```
+
+**`FileNotFoundError: 'oracle.json'`.** Вы передали `--oracle oracle.json`, но
+файла нет. Уберите флаг — сборка пройдёт, а вердикт будет `UNKNOWN`:
+
+```bash
+python -m portagent run /path/to/game --work-dir ./run
+```
+
+Либо положите рядом реальный файл с эталонной трассой (см. раздел 6).
+Отсутствующий `--oracle` теперь даёт аккуратную ошибку с кодом выхода 2, а не
+трейсбек.
+
 **Порт вернул `inconclusive`.** Не хватило итераций — увеличьте
 `--max-iterations` или запустите повторно: правила в `memory.sqlite`
 накопятся и выбор стратегии улучшится.

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import struct
 from pathlib import Path
 
 from .models import ApiKind, BinaryInfo, Engine, GameProfile, Impossibility
@@ -130,6 +131,58 @@ def _sha256(path: Path, limit: int = 8 * 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+def _has_clr_header(data: bytes) -> bool:
+    """True if a PE image carries a .NET CLI header (managed assembly).
+
+    Reads the PE header, walks the data directories to the
+    IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR, and checks for the CLR metadata
+    signature ``BSJB``. Pure Python, header-only (no full parse needed).
+    """
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        return False
+    e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
+    if e_lfanew + 24 > len(data) or data[e_lfanew:e_lfanew + 4] != b"PE\0\0":
+        return False
+    coff = e_lfanew + 4
+    num_sections = struct.unpack_from("<H", data, coff + 2)[0]
+    opt_size = struct.unpack_from("<H", data, coff + 16)[0]
+    opt = coff + 20
+    if opt + opt_size > len(data):
+        return False
+    magic = struct.unpack_from("<H", data, opt)[0]
+    dd_off = opt + (0x70 if magic == 0x20B else 0x60)
+    com_off = dd_off + 14 * 8  # IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR
+    if com_off + 8 > len(data):
+        return False
+    rva, size = struct.unpack_from("<II", data, com_off)
+    if rva == 0 or size == 0:
+        return False
+    # Map the RVA to a file offset via the section table, then locate the
+    # CLI header and its metadata RVA + the BSDJ signature at that RVA.
+    sec = opt + opt_size
+    for i in range(num_sections):
+        s = sec + i * 40
+        if s + 40 > len(data):
+            return False
+        vsize, vaddr, _rsize, raw = struct.unpack_from("<IIII", data, s + 8)
+        if vaddr <= rva < vaddr + max(vsize, 1):
+            cli = raw + (rva - vaddr)
+            break
+    else:
+        return False
+    cli_size = struct.unpack_from("<I", data, cli + 4)[0] if cli + 8 <= len(data) else 0
+    if cli + 32 > len(data) or cli_size == 0:
+        return False
+    meta_rva = struct.unpack_from("<I", data, cli + 8)[0]
+    for i in range(num_sections):
+        s = sec + i * 40
+        vsize, vaddr, _rsize, raw = struct.unpack_from("<IIII", data, s + 8)
+        if vaddr <= meta_rva < vaddr + max(vsize, 1):
+            meta = raw + (meta_rva - vaddr)
+            return meta + 4 <= len(data) and data[meta:meta + 4] == b"BSJB"
+    return False
+
+
 class Analyzer:
     """Reconnaissance component (mission section 4, ``Analyzer``)."""
 
@@ -209,6 +262,11 @@ class Analyzer:
         profile.bitness = 64 if profile.arch.endswith("64") else (32 if arch_votes else None)
 
         self._detect_il2cpp_on_disk(profile, blob)
+        # Managed/CoreCLR titles (Unity Mono, Godot .NET, MonoGame, FNA) often
+        # ship managed assemblies whose PE stubs import nothing, so import
+        # scanning alone misses them. Probe the assembly contents directly.
+        if not profile.il2cpp and not profile.managed:
+            self._detect_managed_on_disk(profile, root, rel_paths, blob)
         profile.runtime_apis = sorted(seen_api, key=lambda a: a.value)
         profile.graphics_api = self._pick_graphics(profile.runtime_apis)
         profile.audio_api = self._pick_audio(profile.runtime_apis)
@@ -293,6 +351,43 @@ class Analyzer:
         if not profile.il2cpp and "/mono/" in blob:
             profile.managed = True
             profile.engine_evidence.append("Mono runtime folder found -> managed Unity build")
+
+    def _detect_managed_on_disk(
+        self, profile: GameProfile, root: Path, rel_paths: list[str], blob: str
+    ) -> None:
+        """Confirm a managed/CoreCLR title by inspecting assembly contents."""
+        # 1) unmistakable CoreCLR / Mono host filenames.
+        coreclr_markers = (
+            "/coreclr.dll", "/hostpolicy.dll", "/hostfxr.dll", "/clrjit.dll",
+            "/libcoreclr.so", "/libmonosgen", "/mono-2.0-sgen.dll",
+        )
+        if any(m in blob for m in coreclr_markers):
+            profile.managed = True
+            profile.engine_evidence.append(
+                "CoreCLR/Mono runtime host present -> managed .NET title"
+            )
+            return
+        # 2) inspect a handful of managed-looking assemblies for the CLR header.
+        candidates = [
+            r for r in rel_paths
+            if r.endswith((".dll", ".exe"))
+            and ("assembly-" in r or "godotsharp" in r or "/managed/" in r
+                 or "monogame" in r or "fna" in r or "sts2" in r)
+        ][:12]
+        for rel in candidates:
+            fp = root / rel.lstrip("/")
+            try:
+                if fp.stat().st_size > 64 * 1024 * 1024:
+                    continue
+                head = fp.read_bytes()[:0x4000]
+            except OSError:
+                continue
+            if _has_clr_header(head):
+                profile.managed = True
+                profile.engine_evidence.append(
+                    f"managed assembly ({rel.split('/')[-1]}) carries a CLR header"
+                )
+                return
 
     def _detect_drm(self, profile: GameProfile, blob: str) -> None:
         for sig, note in DRM_SIGNATURES:

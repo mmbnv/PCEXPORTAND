@@ -53,11 +53,22 @@ class TestAnalyzer(unittest.TestCase):
         p = Analyzer(self.fx["godot_dotnet"]).analyze()
         self.assertEqual(p.engine, Engine.GODOT)
         self.assertGreaterEqual(p.engine_confidence, 0.5)
+        self.assertTrue(p.managed)  # Godot .NET ships managed assemblies
         # Steam is user-space, not a hard blocker.
         self.assertTrue(any("steam" in d.lower() for d in p.drm))
         self.assertTrue(p.feasible)
         # The misleading "needs DBT/Wine" note must NOT appear for a known engine.
         self.assertFalse(any("DBT" in n for n in p.notes))
+
+    def test_managed_detection_via_clr_header(self):
+        from portagent.analyzer import _has_clr_header
+
+        dll = self.fx["unity_mono"] / "MonoGame_Data" / "Managed" / "Assembly-CSharp.dll"
+        self.assertTrue(_has_clr_header(dll.read_bytes()[:0x4000]))
+        native = self.fx["unity_mono"] / "UnityPlayer.dll"
+        self.assertFalse(_has_clr_header(native.read_bytes()[:0x4000]))
+        exe = self.fx["native_d3d11_x86"] / "IndieGame.exe"
+        self.assertFalse(_has_clr_header(exe.read_bytes()[:0x4000]))
 
     def test_anticheat_is_impossible(self):
         p = Analyzer(self.fx["anticheat_title"]).analyze()
