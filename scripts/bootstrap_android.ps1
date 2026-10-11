@@ -63,16 +63,25 @@ $sdkmanager = Join-Path $cmdline "bin\sdkmanager.bat"
 
 if (Test-Path $sdkmanager) {
     Log "accepting licenses ..."
-    # 'y' answers for each license prompt.
+    # Native tools write to stderr; don't let that abort the script.
+    $ErrorActionPreference = "Continue"
     $yes = ("y`n" * 20)
-    $yes | & $sdkmanager --sdk_root="$AndroidSdk" --licenses 2>&1 | Out-Null
+    $yes | & $sdkmanager "--sdk_root=$AndroidSdk" --licenses 2>&1 | Out-Null
     Log "installing platform-tools, build-tools:$BtVersion, platforms;$Platform, ndk, cmake ..."
-    & $sdkmanager --sdk_root="$AndroidSdk" "platform-tools" "build-tools;$BtVersion" `
+    & $sdkmanager "--sdk_root=$AndroidSdk" "platform-tools" "build-tools;$BtVersion" `
         "platforms;$Platform" "cmake;3.22.1" 2>&1 | Out-Null
-    if (-not (& $sdkmanager --sdk_root="$AndroidSdk" "ndk;$NdkVersion" 2>&1 | Out-Null; Test-Path (Join-Path $AndroidSdk "ndk\$NdkVersion"))) {
-        Log "requested NDK $NdkVersion not available; listing ..."
-        & $sdkmanager --sdk_root="$AndroidSdk" --list 2>&1 | Select-String "^\s*ndk;" | Select-Object -Last 1
+    & $sdkmanager "--sdk_root=$AndroidSdk" "ndk;$NdkVersion" 2>&1 | Out-Null
+    if (-not (Test-Path (Join-Path $AndroidSdk "ndk\$NdkVersion"))) {
+        Log "NDK $NdkVersion not available; installing the latest listed NDK ..."
+        $latest = (& $sdkmanager "--sdk_root=$AndroidSdk" --list 2>&1 |
+            Select-String "^\s*ndk;" | Select-Object -Last 1)
+        if ($latest) {
+            $pkg = ($latest.ToString().Trim() -split "\s+")[0]
+            Log "installing $pkg ..."
+            & $sdkmanager "--sdk_root=$AndroidSdk" $pkg 2>&1 | Out-Null
+        }
     }
+    $ErrorActionPreference = "Stop"
 } else {
     Log "sdkmanager not found at $sdkmanager"
 }
@@ -100,17 +109,21 @@ if ($Full) {
 # --- summary ---------------------------------------------------------------
 $ndkDir = Join-Path $AndroidSdk "ndk"
 Log "done. Android SDK at: $AndroidSdk"
+$ndk = $null
+if (Test-Path $ndkDir) {
+    $ndk = (Get-ChildItem $ndkDir -Directory | Select-Object -Last 1).FullName
+}
 Write-Host ""
 Write-Host "Set these in your current shell (or System Properties -> Environment Variables):" -ForegroundColor Cyan
 Write-Host "  `$env:ANDROID_HOME = `"$AndroidSdk`""
 Write-Host "  `$env:ANDROID_SDK_ROOT = `"$AndroidSdk`""
-if (Test-Path $ndkDir) {
-    $ndk = (Get-ChildItem $ndkDir -Directory | Select-Object -Last 1).FullName
-    Write-Host "  `$env:ANDROID_NDK_HOME = `"$ndk`""
-}
+if ($ndk) { Write-Host "  `$env:ANDROID_NDK_HOME = `"$ndk`"" }
 Write-Host ""
 Write-Host "To persist them for future sessions:" -ForegroundColor Cyan
 Write-Host "  setx ANDROID_HOME `"$AndroidSdk`""
 Write-Host "  setx ANDROID_SDK_ROOT `"$AndroidSdk`""
+if ($ndk) { Write-Host "  setx ANDROID_NDK_HOME `"$ndk`"" }
 Write-Host ""
+Write-Host "Then OPEN A NEW terminal (so setx takes effect) and check:" -ForegroundColor Cyan
+Write-Host "  python -c ""from portagent.packager import find_android_toolchain as f; print(f())"""
 Write-Host "Then build:  python run.py   (choose the game folder, click Build APK)"
