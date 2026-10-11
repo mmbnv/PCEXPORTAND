@@ -83,4 +83,5 @@ verification, not a magic "any game → APK" button. In particular:
   games is undecidable, which is exactly why the verifier demands a concrete
   oracle and says `UNKNOWN` otherwise.
 
-See `docs/ARCHITECTURE.md` for the design and `docs/TOOLCHAIN.md` for setup.
+See `docs/ARCHITECTURE.md` for the design, `docs/USAGE.md` for a step-by-step
+usage guide (Russian), and `docs/TOOLCHAIN.md` for setup.
