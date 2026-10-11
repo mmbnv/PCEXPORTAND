@@ -344,7 +344,8 @@ class PortAgent:
         if self._env_failure:
             return (
                 f"environment incomplete: {strat} needs an Android SDK/NDK and host "
-                "build tools that are not installed - install them and re-run"
+                "build tools that are not installed - run `python -m portagent bootstrap` "
+                "(or the menu option 'Install Android toolchain') and re-run"
             )
         if self._apk_built:
             return (

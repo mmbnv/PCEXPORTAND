@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .models import Engine, GameProfile
 from .parsers import parse_file
+from .toolpaths import tools_home
 
 # Extensions we treat as decompilable payloads.
 _MANAGED_HINT = (".dll", ".exe")
@@ -75,9 +76,10 @@ class DecompileResult:
 def find_tools() -> dict[str, str]:
     """Locate every decompiler that is actually available."""
     tools: dict[str, str] = {}
+    tools_home_dir = tools_home()
     jadx = shutil.which("jadx")
     if not jadx:
-        cand = Path.home() / ".portagent-tools" / "jadx" / "bin" / "jadx"
+        cand = tools_home_dir / "jadx" / "bin" / "jadx"
         if cand.is_file():
             jadx = str(cand)
     if jadx:
@@ -86,7 +88,7 @@ def find_tools() -> dict[str, str]:
         p = shutil.which(name)
         if p:
             tools[name] = p
-    il2cpp = Path.home() / ".portagent-tools" / "il2cppdumper" / "Il2CppDumper.dll"
+    il2cpp = tools_home_dir / "il2cppdumper" / "Il2CppDumper.dll"
     if il2cpp.is_file() and shutil.which("dotnet"):
         tools["il2cppdumper"] = str(il2cpp)
     return tools

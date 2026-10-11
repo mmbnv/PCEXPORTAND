@@ -64,6 +64,41 @@ class LauncherPortTests(unittest.TestCase):
             self.assertIn("profile", report)
 
 
+class MarkdownReportTests(unittest.TestCase):
+    def test_message_and_missing_tools_are_surfaced(self):
+        report = {
+            "generated": "2026-01-01T00:00:00",
+            "summary": {
+                "status": "exhausted",
+                "engine": "godot",
+                "strategy": "godot_android",
+                "message": "environment incomplete: godot_android needs an Android SDK/NDK",
+                "environment": {
+                    "python": "3.14.7",
+                    "platform": "Windows-11-10.0.26200-SP0",
+                    "tools": {"javac": "C:\\jdk\\bin\\javac.exe", "aapt2": None, "d8": None},
+                    "android_toolchain": None,
+                },
+            },
+        }
+        md = launcher.format_markdown(report)
+        self.assertIn("Reason: environment incomplete", md)
+        self.assertIn("Tools missing: aapt2, d8", md)
+        self.assertIn("## Next step", md)
+        self.assertIn("python -m portagent bootstrap", md)
+
+    def test_ready_toolchain_has_no_next_step(self):
+        report = {
+            "summary": {
+                "status": "ok",
+                "environment": {"tools": {"javac": "/x"}, "android_toolchain": {"sdk": "/sdk"}},
+            },
+        }
+        md = launcher.format_markdown(report)
+        self.assertNotIn("## Next step", md)
+        self.assertIn("Android toolchain: yes", md)
+
+
 class GuiAvailabilityTests(unittest.TestCase):
     def test_gui_module_imports_and_reports_availability(self):
         from portagent import gui

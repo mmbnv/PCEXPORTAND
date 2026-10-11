@@ -98,9 +98,11 @@ def run_port(
     if toolchain is None:
         # Fail fast with an actionable reason instead of a generic build error.
         msg = (
-            "Android SDK/NDK not found. Set ANDROID_HOME (or ANDROID_SDK_ROOT) to a "
-            "folder containing build-tools/ and platforms/android-*/android.jar, then "
-            "retry. On Windows run scripts/bootstrap_android.ps1 first."
+            "Android SDK/NDK not found. Run the built-in bootstrap to download a "
+            "JDK + Android SDK/NDK with no system installers required:\n"
+            "    python -m portagent bootstrap\n"
+            "then re-run. (Advanced: set ANDROID_HOME/ANDROID_SDK_ROOT to an "
+            "existing SDK that contains build-tools/ and platforms/android-*/android.jar.)"
         )
         _emit(progress, "EXECUTE", msg)
         return {
@@ -176,7 +178,21 @@ def run_port(
 
     failed_steps = [k for k, v in result.steps.items() if str(v).startswith("fail")]
     if result.status == "ok":
-        message = "installable signed APK produced"
+        if runtime.runtime_class == "wine_dxvk" and result.runtime_bundled:
+            message = (
+                "emulation container built: installable signed APK with the ARM64 "
+                "Box64 + Wine + DXVK stack and the game payload. Launches the title "
+                "on an arm64-v8a device; frame-accurate equivalence is not verified "
+                "without an on-device oracle trace."
+            )
+        elif runtime.runtime_class == "wine_dxvk":
+            message = (
+                "APK built, but the ARM64 runtime stack is NOT installed, so the "
+                "container cannot launch the game. Run "
+                "`python -m portagent.runtimes` to fetch Box64 + Wine + DXVK, then rebuild."
+            )
+        else:
+            message = "installable signed APK produced"
     elif result.status == "partial":
         message = "APK built but not fully signed; see logs"
     else:
@@ -268,6 +284,8 @@ def format_markdown(report: dict[str, Any]) -> str:
     rt = s.get("runtime") or {}
     if rt:
         lines.append(f"- Runtime class: {rt.get('runtime_class', '-')}")
+    if s.get("message"):
+        lines.append(f"- Reason: {s['message']}")
     if s.get("apk"):
         lines += [
             f"- APK: `{s.get('apk')}`",
@@ -295,5 +313,15 @@ def format_markdown(report: dict[str, Any]) -> str:
                   f"- Android toolchain: {'yes' if env.get('android_toolchain') else 'NO'}"]
         tools = env.get("tools", {})
         present = [k for k, v in tools.items() if v]
+        missing = [k for k, v in tools.items() if not v]
         lines.append(f"- Tools present: {', '.join(present) if present else 'none'}")
+        if missing:
+            lines.append(f"- Tools missing: {', '.join(missing)}")
+        if not env.get("android_toolchain"):
+            lines += ["", "## Next step", "",
+                      "No Android SDK/NDK was found, so no strategy can build an APK. "
+                      "Install the toolchain with the built-in bootstrap (downloads a "
+                      "JDK + Android SDK/NDK; no system installer required) and re-run:"]
+            lines += ["", "```", "python -m portagent bootstrap", "```", ""]
+            lines.append("Then re-run the loop. See `docs/USAGE.md` section 7 for details.")
     return "\n".join(lines) + "\n"

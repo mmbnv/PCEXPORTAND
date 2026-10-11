@@ -60,15 +60,22 @@ class OptimizerTests(unittest.TestCase):
 
 class ToolchainTests(unittest.TestCase):
     def test_find_toolchain_returns_none_or_dict(self):
-        saved = os.environ.pop("ANDROID_HOME", None)
-        saved2 = os.environ.pop("ANDROID_SDK_ROOT", None)
-        try:
-            self.assertIsNone(find_android_toolchain())
-        finally:
-            if saved:
-                os.environ["ANDROID_HOME"] = saved
-            if saved2:
-                os.environ["ANDROID_SDK_ROOT"] = saved2
+        # An explicit, empty tools home + no ANDROID_HOME must yield None, even
+        # though the machine may have a real SDK cached elsewhere.
+        saved = {k: os.environ.pop(k, None) for k in ("ANDROID_HOME", "ANDROID_SDK_ROOT")}
+        saved_home = os.environ.get("PAGENT_TOOLS_HOME")
+        with tempfile.TemporaryDirectory() as empty:
+            os.environ["PAGENT_TOOLS_HOME"] = empty
+            try:
+                self.assertIsNone(find_android_toolchain())
+            finally:
+                if saved_home is None:
+                    os.environ.pop("PAGENT_TOOLS_HOME", None)
+                else:
+                    os.environ["PAGENT_TOOLS_HOME"] = saved_home
+                for k, v in saved.items():
+                    if v is not None:
+                        os.environ[k] = v
 
     def test_windows_style_tool_names_are_found(self):
         # Windows build-tools are aapt2.exe / d8.bat, not bare names.
@@ -146,6 +153,33 @@ class PackagerTests(unittest.TestCase):
         self.assertIn("classes.dex", names)
         self.assertTrue(any(n.startswith("lib/arm64-v8a/") for n in names))
         self.assertTrue(any(n.startswith("assets/game/") for n in names))
+
+    def test_apk_entry_names_use_forward_slashes(self):
+        # Regression: on Windows str(Path) yields '\' separators, which break
+        # Android asset lookup and make the package look malformed.
+        import zipfile
+
+        res = self._package("native_d3d11_x86")
+        self.assertEqual(res.status, "ok", msg=str(res.logs[-3:]))
+        with zipfile.ZipFile(res.apk) as z:
+            names = z.namelist()
+        offenders = [n for n in names if "\\" in n]
+        self.assertEqual(offenders, [], msg=f"backslash entries: {offenders[:5]}")
+        self.assertTrue(any(n.startswith("assets/") for n in names))
+
+    def test_assemble_avoids_zipfile_write_normpath(self):
+        # ZipFile.write() -> ZipInfo.from_file() -> os.path.normpath turns
+        # 'a/b' into 'a\\b' on Windows. If _assemble ever relies on write()
+        # again, entry names regress and Android rejects the APK. Poison
+        # from_file and require the build to still succeed.
+        import zipfile
+        from unittest import mock
+
+        with mock.patch.object(
+            zipfile.ZipInfo, "from_file", side_effect=AssertionError("ZipFile.write used")
+        ):
+            res = self._package("native_d3d11_x86")
+        self.assertEqual(res.status, "ok", msg=str(res.logs[-3:]))
 
     def test_apk_embeds_runtime_config(self):
         import json
