@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "portagent"
+version = "0.1.0"
+description = "Iterative PC-game -> Android porting orchestrator (ANALYZE/CHOOSE/EXECUTE/VERIFY/LEARN)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+portagent = "portagent.cli:main"
+portagent-gui = "portagent.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["portagent*"]
