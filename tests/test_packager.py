@@ -60,15 +60,22 @@ class OptimizerTests(unittest.TestCase):
 
 class ToolchainTests(unittest.TestCase):
     def test_find_toolchain_returns_none_or_dict(self):
-        saved = os.environ.pop("ANDROID_HOME", None)
-        saved2 = os.environ.pop("ANDROID_SDK_ROOT", None)
-        try:
-            self.assertIsNone(find_android_toolchain())
-        finally:
-            if saved:
-                os.environ["ANDROID_HOME"] = saved
-            if saved2:
-                os.environ["ANDROID_SDK_ROOT"] = saved2
+        # An explicit, empty tools home + no ANDROID_HOME must yield None, even
+        # though the machine may have a real SDK cached elsewhere.
+        saved = {k: os.environ.pop(k, None) for k in ("ANDROID_HOME", "ANDROID_SDK_ROOT")}
+        saved_home = os.environ.get("PAGENT_TOOLS_HOME")
+        with tempfile.TemporaryDirectory() as empty:
+            os.environ["PAGENT_TOOLS_HOME"] = empty
+            try:
+                self.assertIsNone(find_android_toolchain())
+            finally:
+                if saved_home is None:
+                    os.environ.pop("PAGENT_TOOLS_HOME", None)
+                else:
+                    os.environ["PAGENT_TOOLS_HOME"] = saved_home
+                for k, v in saved.items():
+                    if v is not None:
+                        os.environ[k] = v
 
     def test_windows_style_tool_names_are_found(self):
         # Windows build-tools are aapt2.exe / d8.bat, not bare names.

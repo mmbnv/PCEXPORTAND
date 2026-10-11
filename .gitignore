@@ -12,3 +12,5 @@ nul
 .agent_tmp/
 portagent_report.json
 portagent_report.md
+dist/
+portagent_out/

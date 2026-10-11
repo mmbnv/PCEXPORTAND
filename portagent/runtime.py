@@ -24,15 +24,17 @@ it never pretends to run.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .models import ApiKind, Engine, GameProfile, PortStrategy
 from .optimizer import OptimizationPlan
+from .toolpaths import tools_home
 
 # Where an operator drops prebuilt ARM64 runtime payloads.
-RUNTIME_HOME = Path.home() / ".portagent-tools" / "runtime"
+RUNTIME_HOME = tools_home() / "runtime"
 
 # Runtime libraries each class needs, by filename (matched loosely).
 RUNTIME_LIBS: dict[str, list[str]] = {

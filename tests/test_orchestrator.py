@@ -76,10 +76,18 @@ class TestOrchestrator(unittest.TestCase):
 
         work = Path(self.tmp.name) / "run_no_sdk"
         saved = {k: os.environ.pop(k, None) for k in ("ANDROID_HOME", "ANDROID_SDK_ROOT")}
+        saved_home = os.environ.get("PAGENT_TOOLS_HOME")
+        empty_tools = Path(self.tmp.name) / "empty_tools"
+        empty_tools.mkdir()
+        os.environ["PAGENT_TOOLS_HOME"] = str(empty_tools)
         try:
             agent = PortAgent(work, memory_path=work / "m.sqlite", max_iterations=6)
             outcome = agent.run(self.fx["native_d3d11_x86"])
         finally:
+            if saved_home is None:
+                os.environ.pop("PAGENT_TOOLS_HOME", None)
+            else:
+                os.environ["PAGENT_TOOLS_HOME"] = saved_home
             for k, v in saved.items():
                 if v is not None:
                     os.environ[k] = v

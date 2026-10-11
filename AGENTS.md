@@ -107,3 +107,34 @@ python -m portagent memory --memory <db>
   with `WINEDLLOVERRIDES=...=n,b`, and (d) rewrites the Turnip ICD path.
 - Tests for the packager are skipped (not faked) when the SDK is absent.
 - `*.apk` is git-ignored — never commit build outputs.
+
+## One-folder bundle (everything in one place)
+
+`scripts/make_bundle.sh [OUT_DIR]` assembles a single self-contained folder
+(default `dist/portagent-bundle/`) that contains the code *and* every external
+tool, so a user can move one directory to another machine and run it with no
+setup:
+
+```
+dist/portagent-bundle/
+├── portagent/  run.py  docs/  scripts/     # the code
+├── tools/android-sdk/   # aapt2, d8, zipalign, apksigner, android.jar, NDK clang
+├── tools/jadx/  tools/il2cppdumper/  tools/apktool.jar
+├── tools/runtime/wine_dxvk/               # Box64 + Wine + DXVK + Turnip (~475 MB)
+├── install.sh  START.sh                   # Linux/macOS
+└── install.bat START.bat                  # Windows
+```
+
+- `install.sh` / `install.bat` write `env.sh` / `env.bat`
+  (`PAGENT_TOOLS_HOME`, `ANDROID_HOME`, `ANDROID_NDK_HOME`, `PATH`,
+  `PYTHONPATH`) and print an OK/MISS checklist. `START.sh` / `START.bat` source
+  it and run `run.py`. No network and no system-wide install are required.
+- `portagent/toolpaths.py` is the single resolver for tool locations. Order:
+  explicit env (`PAGENT_TOOLS_HOME`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`,
+  `ANDROID_NDK_HOME`) → `<repo>/tools` (the bundle) → `~/.portagent-tools`.
+  This is why the bundle works with zero configuration; an env var still wins.
+- Tests that assert "no SDK" must isolate the environment by pointing
+  `PAGENT_TOOLS_HOME` at an empty temp dir, otherwise the bundle/`tools/`
+  fallback (or the real cache) makes an SDK appear.
+- `dist/` is git-ignored. Never commit the ~3.4 GB bundle; rebuild it with the
+  script instead.

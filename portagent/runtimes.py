@@ -40,6 +40,8 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .toolpaths import tools_home
+
 # Pinned upstream release.  Bumping this is a deliberate, reviewed change.
 WINLATOR_VERSION = "11.2.0"
 WINLATOR_APK_URL = (
@@ -47,8 +49,10 @@ WINLATOR_APK_URL = (
     f"v{WINLATOR_VERSION}/Winlator_{WINLATOR_VERSION}.apk"
 )
 
-RUNTIME_HOME = Path.home() / ".portagent-tools" / "runtime"
-CACHE_HOME = Path.home() / ".portagent-tools" / "cache"
+from .toolpaths import tools_home
+
+RUNTIME_HOME = tools_home() / "runtime"
+CACHE_HOME = tools_home() / "cache"
 
 # ELF e_machine values we accept for each role.
 _ELF_AARCH64 = 0xB7

@@ -91,7 +91,9 @@ def _tool_in(directory: Path, name: str) -> str | None:
 
 def find_android_toolchain() -> dict[str, str] | None:
     """Locate build-tools + android.jar + NDK, or return ``None``."""
-    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    from .toolpaths import android_home, android_ndk_home
+
+    sdk = android_home()
     if not sdk:
         return None
     sdk_p = Path(sdk)
@@ -122,7 +124,9 @@ def find_android_toolchain() -> dict[str, str] | None:
 
 
 def _find_ndk(sdk_p: Path) -> str | None:
-    env = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT")
+    from .toolpaths import android_ndk_home
+
+    env = android_ndk_home()
     if env and Path(env).is_dir():
         return env
     ndk_root = sdk_p / "ndk"
