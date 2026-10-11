@@ -77,7 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print(
+            "hint: pass a real path to the game folder or installer, "
+            "e.g. analyze \"C:\\\\Games\\\\MyGame\"",
+            file=sys.stderr,
+        )
+        return 2
 
 
 if __name__ == "__main__":

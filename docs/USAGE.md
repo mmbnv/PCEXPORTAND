@@ -69,6 +69,32 @@ python -m portagent memory --memory ./run/memory.sqlite
 В качестве `game` можно передать **папку** установленной игры или **один файл**
 установщика.
 
+> `/path/to/game` в примерах — это **заглушка**, а не реальный путь. Замените её
+> на путь к вашей игре. Если передать её как есть, на Windows получится
+> `\path\to\game` и появится ошибка «no such file or directory».
+
+### Windows (PowerShell)
+
+Пишите путь к игре в кавычках, можно и с прямыми, и с обратными слэшами:
+
+```powershell
+python -m portagent analyze "C:\Games\MyGame"
+python -m portagent analyze "D:/Games/MyGame"      # прямые слэши тоже работают
+python -m portagent analyze "C:\Games\setup.exe"   # файл установщика
+```
+
+Если игра лежит рядом с проектом:
+
+```powershell
+python -m portagent analyze ".\MyGame"
+```
+
+### Linux / macOS
+
+```bash
+python -m portagent analyze "/home/user/Games/MyGame"
+```
+
 ---
 
 ## 4. Команда `analyze` — разведка
