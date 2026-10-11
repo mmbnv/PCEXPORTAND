@@ -152,6 +152,7 @@ class ApkPackager:
         tools = find_android_toolchain()
         if tools is None:
             res.status = "fail"
+            res.steps["toolchain"] = "missing"
             res.logs.append(
                 "Android SDK not found; set ANDROID_HOME (see scripts/bootstrap_android.sh)"
             )

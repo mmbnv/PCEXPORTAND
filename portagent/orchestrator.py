@@ -44,6 +44,7 @@ class RunOutcome:
     apk: str | None = None
     verify: dict[str, Any] | None = None
     reports: list[dict[str, Any]] = field(default_factory=list)
+    message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +53,7 @@ class RunOutcome:
             "strategy": self.strategy.value if self.strategy else None,
             "apk": self.apk,
             "verify": self.verify,
+            "message": self.message,
             "profile": self.profile.to_dict(),
             "reports": self.reports,
         }
@@ -73,6 +75,9 @@ class PortAgent:
         self.memory = Memory(memory_path or (self.work_dir / "memory.sqlite"))
         self.planner = Planner(self.memory)
         self.reports: list[StepReport] = []
+        self._profile_engine: str | None = None
+        self._env_failure = False
+        self._apk_built = False
 
     # -- report helper ----------------------------------------------------
     def _emit(
@@ -114,6 +119,7 @@ class PortAgent:
             # --- ANALYZE ---
             if profile is None:
                 profile = Analyzer(game_path, deep=True).analyze()
+                self._profile_engine = profile.engine.value
                 prof_path = write_json(self.work_dir / "profile.json", profile.to_dict())
                 self._emit(
                     StepName.ANALYZE,
@@ -196,6 +202,11 @@ class PortAgent:
             apk = pkg.apk or build.apk
             if apk:
                 self._last_apk = apk
+            if pkg.status == "ok":
+                self._apk_built = True
+            if "missing" in str(pkg.steps.get("toolchain", "")):
+                # No point retrying other strategies: every build path needs the SDK.
+                self._env_failure = True
             build_path = write_json(exec_dir / "build_result.json", build.to_dict())
             pkg_path = write_json(exec_dir / "package_result.json", pkg.to_dict())
             if apk and pkg.apk:
@@ -260,7 +271,11 @@ class PortAgent:
                 inp=chosen.name.value,
                 action="record outcome + update heuristics",
                 result=Result.OK,
-                next_="ACCEPT" if verify.verdict == Verdict.PASS else "CHOOSE(next strategy)",
+                next_=(
+                    "ACCEPT" if verify.verdict == Verdict.PASS
+                    else "STOP(environment)" if self._env_failure
+                    else "CHOOSE(next strategy)"
+                ),
                 iteration=iteration,
                 memory_update={
                     "recorded": chosen.name.value,
@@ -268,6 +283,10 @@ class PortAgent:
                     "stats": self.memory.stats(),
                 },
             )
+
+            if self._env_failure:
+                # A missing SDK blocks every strategy; do not burn the budget.
+                return self._finish("exhausted", iteration, chosen.name, profile)
 
             if verify.verdict == Verdict.PASS:
                 self._emit(
@@ -293,6 +312,7 @@ class PortAgent:
         profile: GameProfile,
         apk: str | None = None,
         verify: dict[str, Any] | None = None,
+        message: str = "",
     ) -> RunOutcome:
         outcome = RunOutcome(
             status=status,
@@ -302,6 +322,30 @@ class PortAgent:
             apk=apk or getattr(self, "_last_apk", None),
             verify=verify,
             reports=[r.to_dict() for r in self.reports],
+            message=message or self._describe(status, strategy),
         )
         write_json(self.work_dir / "run_outcome.json", outcome.to_dict())
         return outcome
+
+    def _describe(self, status: str, strategy: PortStrategy | None) -> str:
+        """A one-line, human-readable reason for the final status."""
+        eng = self._profile_engine or "?"
+        if status == "accepted":
+            return f"port verified equivalent ({strategy.value if strategy else eng})"
+        if status == "impossible":
+            return "hard blocker: no Android-compatible path exists for this title"
+        strat = strategy.value if strategy else "none"
+        if self._env_failure:
+            return (
+                f"environment incomplete: {strat} needs an Android SDK/NDK and host "
+                "build tools that are not installed - install them and re-run"
+            )
+        if self._apk_built:
+            return (
+                "APK built, but equivalence could not be proven without an oracle trace "
+                "- supply one to reach PASS"
+            )
+        return (
+            f"no verified port for {eng} after {self.max_iterations} iteration(s); "
+            "strategies that need an Android SDK/NDK were blocked by the environment"
+        )

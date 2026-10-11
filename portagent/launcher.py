@@ -229,8 +229,12 @@ def run_loop(
     )
     outcome = agent.run(str(game))
     out = outcome.to_dict()
+    prof = out.get("profile") or {}
+    out.setdefault("engine", prof.get("engine"))
     out["environment"] = environment()
     _emit(progress, "LOOP", f"status={outcome.status}")
+    if out.get("message"):
+        _emit(progress, "LOOP", out["message"])
     return out
 
 

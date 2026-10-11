@@ -71,6 +71,26 @@ class TestOrchestrator(unittest.TestCase):
         rules = agent.memory.all_rules()
         self.assertTrue(any(r.engine == "unity" and r.successes > 0 for r in rules))
 
+    def test_missing_sdk_stops_early_with_clear_message(self):
+        import os
+
+        work = Path(self.tmp.name) / "run_no_sdk"
+        saved = {k: os.environ.pop(k, None) for k in ("ANDROID_HOME", "ANDROID_SDK_ROOT")}
+        try:
+            agent = PortAgent(work, memory_path=work / "m.sqlite", max_iterations=6)
+            outcome = agent.run(self.fx["native_d3d11_x86"])
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+        # A missing SDK blocks every strategy, so the loop must not burn its budget.
+        self.assertEqual(outcome.status, "exhausted")
+        self.assertEqual(outcome.iterations, 1)
+        self.assertIsNotNone(outcome.strategy)
+        self.assertIn("SDK", outcome.message)
+        # The strategy actually chosen is reported, not dropped.
+        self.assertIn(outcome.strategy.value, " ".join(r["action"] for r in outcome.reports))
+
 
 if __name__ == "__main__":
     unittest.main()
