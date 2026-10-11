@@ -162,6 +162,14 @@ On Windows the packager invokes `.bat`/`.cmd` through `cmd.exe` (CreateProcess
 cannot exec them directly), and `javac`/`keytool` are resolved through
 `JAVA_HOME` first via `packager._java_tool`.
 
+Windows ships a JDK *shim* directory (`...\Common Files\Oracle\Java\javapath`)
+that puts `javac` on PATH without being a JDK home; users often also have a
+stale `JAVA_HOME` pointing at its parent. Passing either to `sdkmanager` aborts
+with "JAVA_HOME is set to an invalid directory". `toolpaths.is_valid_java_home`
+rejects anything lacking `bin/javac`, `ensure_jdk` ignores a shim `javac`/bogus
+`JAVA_HOME` and downloads Temurin instead, and `_load_bootstrap_env` lets the
+bootstrapped `JAVA_HOME` override an invalid one in the shell.
+
 `portagent/runtimes.py` pins the Winlator release; the release asset is
 `Winlator_11.2.apk` (no trailing `.0`). If the pinned URL ever 404s,
 `_resolve_winlator_url` falls back to the GitHub releases API so the fetch

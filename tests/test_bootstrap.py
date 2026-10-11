@@ -47,6 +47,32 @@ class FindJavaHomeTests(unittest.TestCase):
             self.assertIsNone(bs._find_java_home(Path(td) / "jdk"))
 
 
+class ValidJavaHomeTests(unittest.TestCase):
+    def _exe(self) -> str:
+        return "javac.exe" if os.name == "nt" else "javac"
+
+    def test_true_only_when_bin_javac_present(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            good = Path(td) / "jdk-17"
+            (good / "bin").mkdir(parents=True)
+            (good / "bin" / self._exe()).write_text("")
+            self.assertTrue(bs._is_valid_java_home(good))
+
+    def test_false_for_windows_shim_dir(self) -> None:
+        # The Oracle javapath shim dir has javac.exe but no bin/ subdir, so it
+        # is not a JDK home (this is what broke sdkmanager on Windows).
+        with tempfile.TemporaryDirectory() as td:
+            shim = Path(td) / "Java" / "javapath"
+            shim.mkdir(parents=True)
+            (shim / self._exe()).write_text("")
+            self.assertFalse(bs._is_valid_java_home(shim.parent))
+
+    def test_false_for_missing_or_empty(self) -> None:
+        self.assertFalse(bs._is_valid_java_home(None))
+        self.assertFalse(bs._is_valid_java_home(""))
+        self.assertFalse(bs._is_valid_java_home("/no/such/dir"))
+
+
 class EnsureJdkTests(unittest.TestCase):
     def test_reuses_already_unpacked_jdk(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -59,6 +85,45 @@ class EnsureJdkTests(unittest.TestCase):
                 jdk = bs.ensure_jdk(home)
             dl.assert_not_called()
             self.assertIsNotNone(jdk)
+
+    def test_ignores_bogus_java_home_and_downloads(self) -> None:
+        # Regression: JAVA_HOME pointing at .../Common Files/Oracle/Java and a
+        # shim javac on PATH must NOT be accepted; a real JDK is downloaded.
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            exe = "javac.exe" if os.name == "nt" else "javac"
+            shim = home / "Oracle" / "Java" / "javapath"
+            shim.mkdir(parents=True)
+            (shim / exe).write_text("")
+
+            def fake_download(url, dest, progress=None, label=""):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(b"")
+                unpacked = home / "jdk" / "jdk-17.0.11+9" / "bin"
+                unpacked.mkdir(parents=True)
+                (unpacked / exe).write_text("")
+
+            with mock.patch.dict(os.environ, {"JAVA_HOME": str(shim.parent)}), \
+                    mock.patch.object(bs.shutil, "which", return_value=str(shim / exe)), \
+                    mock.patch.object(bs, "_download", fake_download), \
+                    mock.patch.object(bs, "_unzip", lambda *a, **k: None):
+                jdk = bs.ensure_jdk(home)
+            self.assertIsNotNone(jdk)
+            self.assertTrue(bs._is_valid_java_home(jdk))
+            self.assertNotEqual(str(jdk), str(shim.parent))
+
+    def test_prefers_valid_java_home_env(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            real = home / "system-jdk"
+            (real / "bin").mkdir(parents=True)
+            exe = "javac.exe" if os.name == "nt" else "javac"
+            (real / "bin" / exe).write_text("")
+            with mock.patch.dict(os.environ, {"JAVA_HOME": str(real)}), \
+                    mock.patch.object(bs, "_download") as dl:
+                jdk = bs.ensure_jdk(home)
+            dl.assert_not_called()
+            self.assertEqual(Path(jdk), real)
 
 
 class FindNdkTests(unittest.TestCase):

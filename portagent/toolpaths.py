@@ -21,6 +21,22 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def is_valid_java_home(path: str | os.PathLike | None) -> bool:
+    """True when ``path`` is a real JDK home (contains ``bin/javac``).
+
+    Guards against Windows' ``.../Oracle/Java/javapath`` shim directory, which
+    puts ``javac`` on PATH without being a JDK home. Passing such a path as
+    ``JAVA_HOME`` makes ``sdkmanager`` abort.
+    """
+    if not path:
+        return False
+    p = Path(path)
+    if not p.is_dir():
+        return False
+    exe = "javac.exe" if os.name == "nt" else "javac"
+    return (p / "bin" / exe).is_file()
+
+
 def tools_home() -> Path:
     """Root holding ``runtime/``, ``jadx/``, ``il2cppdumper/`` and friends.
 
@@ -41,7 +57,8 @@ def _load_bootstrap_env() -> None:
 
     Without this, the SDK/NDK a user just downloaded would be invisible to the
     very next command, so they would have to hand-copy ``setx`` lines. Explicit
-    variables in the current shell always win.
+    variables in the current shell win, except an invalid ``JAVA_HOME`` (e.g.
+    Windows' ``javapath`` shim parent), which the bootstrapped value overrides.
     """
     env_file = tools_home() / "env.json"
     if not env_file.is_file():
@@ -51,7 +68,13 @@ def _load_bootstrap_env() -> None:
     except (OSError, ValueError):
         return
     for key, value in data.items():
-        if key.startswith(("ANDROID_", "JAVA_HOME", "PAGENT_TOOLS_HOME")) and value:
+        if not (key.startswith(("ANDROID_", "JAVA_HOME", "PAGENT_TOOLS_HOME")) and value):
+            continue
+        # A stale/invalid JAVA_HOME in the shell must not shadow the JDK we
+        # just bootstrapped; everything else respects an explicit override.
+        if key == "JAVA_HOME" and not is_valid_java_home(os.environ.get("JAVA_HOME")):
+            os.environ[key] = str(value)
+        else:
             os.environ.setdefault(key, str(value))
 
 

@@ -28,6 +28,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .toolpaths import is_valid_java_home as _is_valid_java_home
 from .toolpaths import tools_home
 
 # Pinned, known-good versions.  Bumping these is a deliberate change.
@@ -135,14 +136,29 @@ def _find_java_home(root: Path) -> Path | None:
 
 
 def ensure_jdk(home: Path, progress=None) -> Path | None:
-    """Return a JDK home, downloading Temurin if no system JDK is usable."""
+    """Return a usable JDK home, downloading Temurin if none is valid.
+
+    A JDK is only trusted when it actually looks like a JDK home; a stale or
+    shim ``JAVA_HOME``/``javac`` is ignored rather than passed to sdkmanager,
+    which would abort with "JAVA_HOME is set to an invalid directory".
+    """
     existing = _find_java_home(home / "jdk")
-    if existing is not None:
+    if existing is not None and _is_valid_java_home(existing):
         return existing
-    # A system JDK is fine too.
+
+    env_home = os.environ.get("JAVA_HOME")
+    if _is_valid_java_home(env_home):
+        return Path(env_home)
+
     javac = shutil.which("javac")
     if javac:
-        return Path(javac).resolve().parent.parent
+        # Follow symlinks/shim launchers, then also try the literal location.
+        for cand in (Path(javac).resolve().parent.parent, Path(javac).parent.parent):
+            if _is_valid_java_home(cand):
+                return cand
+        _emit(progress, "jdk",
+              f"ignoring javac at {javac}: its parent is not a valid JDK home")
+
     url = _jdk_url()
     archive = home / "cache" / "jdk.zip"
     _download(url, archive, progress, label=f"JDK {JDK_FEATURE} (Temurin)")
@@ -151,7 +167,10 @@ def ensure_jdk(home: Path, progress=None) -> Path | None:
         _unzip(archive, dest)
     else:
         _extract_tar(archive, dest)
-    return _find_java_home(dest)
+    found = _find_java_home(dest)
+    if found is None:
+        raise RuntimeError("no javac found after unpacking the JDK archive")
+    return found
 
 
 # ---------------------------------------------------------------------------
