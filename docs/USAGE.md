@@ -62,6 +62,9 @@ python -m portagent analyze /path/to/game
 # 2) Полный цикл порта
 python -m portagent run /path/to/game --work-dir ./run
 
+# 2b) Сразу все классы стратегий → сводка по всем играм
+python -m portagent portall --work-dir ./all
+
 # 3) Посмотреть накопленный опыт
 python -m portagent memory --memory ./run/memory.sqlite
 ```
@@ -72,8 +75,10 @@ python -m portagent memory --memory ./run/memory.sqlite
 python -m portagent port "C:\Games\MyGame" -o MyGame.apk
 ```
 
-Она делает весь конвейер сразу: `ANALYZE → CHOOSE → TRANSLATE → BUILD`,
-собирает **настоящий подписанный APK** и оптимизирует его под телефон.
+Она делает весь конвейер сразу:
+`ANALYZE → CHOOSE → DECOMPILE → TRANSLATE → BUILD → VERIFY`, собирает
+**настоящий подписанный APK**, встраивает слой запуска и оптимизирует его под
+телефон.
 
 Результат — JSON, где главное поле `apk`:
 
@@ -88,8 +93,13 @@ python -m portagent port "C:\Games\MyGame" -o MyGame.apk
   "aligned": true,
   "abis": ["arm64-v8a"],
   "assets": {"files": 8, "bytes": 291304},
+  "runtime": {"runtime_class": "engine_native", "entry": "GodotGame.exe",
+              "backend": "vulkan", "translation": "dxvk"},
+  "runtime_bundled": [],
+  "decompile": {"status": "ok", "tools_used": ["monodis", "objdump"]},
   "optimization": {"graphics_backend": "vulkan", "heap_mb": 512, "dbt": false},
-  "steps": {"aapt2_compile": "ok", "aapt2_link": "ok", "javac": "ok",
+  "steps": {"runtime": "engine_native: config only (runtime libs not installed)",
+            "aapt2_compile": "ok", "aapt2_link": "ok", "javac": "ok",
             "d8": "ok", "native_arm64-v8a": "ok", "assemble": "ok",
             "zipalign": "ok", "sign": "ok"}
 }
@@ -98,18 +108,39 @@ python -m portagent port "C:\Games\MyGame" -o MyGame.apk
 Что внутри APK:
 
 ```
-AndroidManifest.xml             ландшафтная активность-лаунчер
-classes.dex                     слой запуска (PortActivity)
-lib/arm64-v8a/libportagent.so   собранные NDK-прослойки совместимости
-assets/game/**                  вся игра; распаковывается при первом запуске
+AndroidManifest.xml                 ландшафтная активность-лаунчер
+classes.dex                         встроенный слой запуска (PortActivity)
+lib/arm64-v8a/libportagent.so       собранные NDK-прослойки совместимости
+assets/game/**                      вся игра; распаковывается при первом запуске
+assets/game/portagent_runtime/      класс запуска + env.json (+ библиотеки)
 ```
+
+**Класс запуска** выбирается автоматически по результату анализа:
+
+| Класс | Для чего | Что делает |
+|---|---|---|
+| `engine_native` | Unity / Unreal / Godot / GameMaker / RPG Maker | запускает родной ARM64-рантайм движка на данных игры |
+| `mono_managed` | игры на .NET / Mono | поднимает Mono и грузит восстановленные сборки |
+| `dbt_box64` | нативные x86/x64 | запускает оригинальный exe через Box64 (DBT) |
+| `wine_dxvk` | нативные Windows + D3D | Box64 + Wine + DXVK/VKD3D |
+
+Тяжёлые ARM64-рантаймы (Box64, Wine, DXVK) **не лежат в репозитории**;
+`scripts/fetch_runtimes.sh` кладёт их в `~/.portagent-tools/runtime/<класс>/`, и
+упаковщик встраивает то, что установлено. Если рантайма нет, приложение прямо
+пишет, какой библиотеки не хватает — оно не делает вид, что игра запущена.
+
+**Этап DECOMPILE** реально восстанавливает код: `monodis` даёт IL управляемых
+сборок, `objdump` — дизассемблер нативных файлов, `jadx` — исходники DEX,
+`Il2CppDumper` — метаданные Unity IL2CPP. Пропустить его можно флагом
+`--no-decompile`.
 
 APK проходит `apksigner verify` (схемы v2 и v3) и `zipalign -c`.
 
 **Что это честно делает:** создаёт валидное устанавливаемое приложение,
-которое несёт игру и слой совместимости, и оптимизирует его под телефон.
-**Чего ещё не делает:** не пересобирает произвольную игровую логику из
-машинного кода — это следующий этап (связка Decompiler → Translator).
+которое несёт игру, слой совместимости и слой запуска, и оптимизирует его под
+телефон. **Чего ещё не делает:** не компилирует восстановленную логику обратно в
+нативную ARM64-игру — это следующий этап (связка Decompiler → Translator →
+пересборка).
 
 Требуется Android SDK/NDK — поставьте его скриптом из раздела 7.
 
@@ -119,6 +150,20 @@ APK проходит `apksigner verify` (схемы v2 и v3) и `zipalign -c`.
 > `/path/to/game` в примерах — это **заглушка**, а не реальный путь. Замените её
 > на путь к вашей игре. Если передать её как есть, на Windows получится
 > `\path\to\game` и появится ошибка «no such file or directory».
+
+### Команда `portall` — сразу все классы стратегий
+
+```bash
+python -m portagent portall --work-dir ./all
+```
+
+Одна команда прогоняет весь конвейер по всем встроенным фикстурам (по одному
+представителю каждого класса стратегий) и возвращает сводку: для каждой игры —
+движок, выбранная стратегия, класс запуска, статус сборки APK и вердикт
+(`ok`/`FAIL`). Игра с античитом должна дать `impossible` — это тоже «ok».
+Так проверяется, что связка «анализ → декомпиляция → запуск → сборка APK»
+работает для каждого класса стратегий. Можно передать свои папки игр вместо
+фикстур: `python -m portagent portall /path/to/game1 /path/to/game2`.
 
 ### Windows (PowerShell)
 

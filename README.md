@@ -4,24 +4,28 @@ Iterative PC-game → Android porter. PortAgent takes an installed game folder o
 installer and drives the loop
 
 ```
-ANALYZE → CHOOSE → EXECUTE → VERIFY → LEARN   (repeat)
+ANALYZE → CHOOSE → DECOMPILE → EXECUTE → VERIFY → LEARN   (repeat)
 ```
 
 until a build is **verified equivalent** to the original, or the game is
 **formally declared impossible** for its class.
 
 Every stage is a real component: binaries are parsed with pure-Python PE/ELF
-readers, API translation emits compilable C shims, and the **packager produces a
-real, installable, signed APK** using the Android build-tools directly (aapt2,
-javac, d8, zipalign, apksigner) — no Gradle and no network. The verifier
-compiles and runs a scene harness (`menu → gameplay → save`) and compares trace
-hashes against an oracle.
+readers, code is recovered with real tools (monodis/objdump/jadx/Il2CppDumper),
+API translation emits compilable C shims, an embedded runtime layer dispatches to
+the right backend, and the **packager produces a real, installable, signed APK**
+using the Android build-tools directly (aapt2, javac, d8, zipalign, apksigner) —
+no Gradle and no network. The verifier compiles and runs a scene harness
+(`menu → gameplay → save`) and compares trace hashes against an oracle.
 
 ## Quick start
 
 ```bash
 # one command: game folder -> installable, signed APK
 python -m portagent port "C:\Games\MyGame" -o MyGame.apk
+
+# every strategy class at once: build all built-in fixtures -> signed APKs
+python -m portagent portall --work-dir ./all
 
 # reconnaissance only
 python -m portagent analyze /path/to/game
@@ -58,24 +62,39 @@ impossible.
 A real, installable, signed APK containing:
 
 ```
-AndroidManifest.xml            landscape launcher Activity
-classes.dex                    the runtime layer (PortActivity)
-lib/arm64-v8a/libportagent.so  compiled compatibility shims (NDK clang)
-assets/game/**                 the full game payload, unpacked on first run
+AndroidManifest.xml                 landscape launcher Activity
+classes.dex                         the embedded runtime layer (PortActivity)
+lib/arm64-v8a/libportagent.so       compiled compatibility shims (NDK clang)
+assets/game/**                      the full game payload, unpacked on first run
+assets/game/portagent_runtime/      runtime class + env.json (+ bundled libs)
 ```
 
-The Activity unpacks `assets/game/**` into app-private storage and initialises
-the graphics/audio backends. `apksigner verify` passes (v2+v3 schemes) and
-`zipalign -c` passes.
+The Activity unpacks `assets/game/**` into app-private storage, then dispatches
+on the **runtime class** chosen for the title:
+
+| Runtime class | Used for | What it does |
+|---|---|---|
+| `engine_native` | Unity / Unreal / Godot / GameMaker / RPG Maker | runs the engine's own ARM64 runtime on the data pack |
+| `mono_managed` | .NET / Mono titles | boots Mono and loads the recovered managed assemblies |
+| `dbt_box64` | native x86/x64 titles | runs the original exe under Box64 dynamic binary translation |
+| `wine_dxvk` | native Windows + D3D titles | Box64 + Wine + DXVK/VKD3D translation stack |
+
+The runtime class and its environment are written to
+`assets/game/portagent_runtime/env.json` at build time. The heavy ARM64 runtime
+payloads (Box64, Wine, DXVK) are **not** vendored in this repo; `scripts/fetch_runtimes.sh`
+pulls them into `~/.portagent-tools/runtime/<class>/`, and the packager bundles
+whatever is installed. When a runtime is absent the app says so by name — it
+never pretends to have run the game.
+
+`apksigner verify` passes (v2+v3 schemes) and `zipalign -c` passes.
 
 **Honest boundary:** this is a *valid, launchable Android app that carries the
-game and the compatibility layer*. It does **not** yet recompile arbitrary game
-logic — that requires the Decompiler → Translator → rebuild path (Ghidra /
-Il2CppDumper / ILSpy output wired into source reconstruction), which is the next
-milestone. For engines with a first-party Android exporter (Unity, Unreal,
-Godot, GameMaker, RPG Maker) the payload + runtime layer is the correct
-container; for native x86/x64 titles the runtime layer is where the
-Box64/Wine/DXVK stack is mounted.
+game, the compatibility layer, and the runtime dispatch*. It does **not** yet
+recompile arbitrary game logic into Kotlin/C++ — that requires the
+Decompiler → Translator → rebuild path (Ghidra / Il2CppDumper / ILSpy output
+wired into source reconstruction), which is the next milestone. For engines with
+a first-party Android exporter the payload + engine runtime is the correct
+container; for native x86/x64 titles the runtime layer mounts Box64/Wine/DXVK.
 
 ## What is implemented vs. scaffolded
 
@@ -86,26 +105,31 @@ Box64/Wine/DXVK stack is mounted.
 | Impossibility detection (kernel anti-cheat, .sys, VMProtect) | **implemented** |
 | Memory (attempts, patch vectors, heuristic rules) | **implemented**, SQLite |
 | Strategy planner with learned weighting | **implemented** |
+| Decompiler (monodis IL / objdump asm / jadx dex / Il2CppDumper) | **implemented**, real tools, in the loop |
 | Translator → compilable Win32/gfx/audio C shims + mapping | **implemented** |
 | Builder → Gradle/NDK project + host compile | **implemented** |
-| **Packager → real installable signed APK (aapt2/d8/zipalign/apksigner)** | **implemented**, verified with `apksigner verify` |
 | Optimizer → ABI/backend/heap/DBT plan written into the APK | **implemented** |
-| Runtime layer → launcher Activity unpacks the game payload | **implemented** |
+| Runtime layer → dispatch + payload unpack + runtime class config | **implemented** |
+| **Packager → real installable signed APK (aapt2/d8/zipalign/apksigner)** | **implemented**, verified with `apksigner verify` |
 | Verifier → determinism + scene equivalence | **implemented** |
 | Verifier → on-device FPS/memory/temperature | **not implemented** (no device in CI) |
-| Decompiler (Ghidra/dnSpy/jadx/Il2CppDumper) | **orchestrated** via bootstrap; not yet wired into automatic code reconstruction |
+| Runtime binaries (Box64/Wine/DXVK ARM64 builds) | **not vendored**; fetched via `scripts/fetch_runtimes.sh` |
 
 ## Honest limitations
 
-PortAgent is a working *pipeline* with real analysis, translation, build and
-verification, not a magic "any game → APK" button. In particular:
+PortAgent is a working *pipeline* with real analysis, decompilation, translation,
+runtime dispatch, build and verification, not a magic "any game → APK" button. In
+particular:
 
 - **Equivalence is only as good as the oracle.** Without a reference trace the
   verifier returns `UNKNOWN`, never a false `PASS`.
-- **Full automatic reconstruction** of arbitrary game logic (the Decompiler →
-  Translator → rebuild path) is the long pole. The current Translator generates
-  the API-compatibility layer; wiring Ghidra/Il2CppDumper output into automatic
-  source reconstruction is the next milestone.
+- **Full automatic reconstruction** of arbitrary game logic (Decompiler →
+  Translator → rebuild) is the long pole. The Decompiler now really recovers IL
+  and disassembly and the runtime layer really dispatches, but compiling recovered
+  code back into a native ARM64 game is the next milestone.
+- **Runtime payloads are external.** Box64/Wine/DXVK ARM64 builds are large and
+  licence-encumbered; they are fetched separately, and the app reports which one
+  is missing.
 - **No KVM / no device** in this environment, so performance thresholds and
   on-device runs are not exercised here.
 - The "converges with probability 1" claim from the brief is not a real theorem

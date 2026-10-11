@@ -27,6 +27,8 @@ python -m unittest discover -s tests -v     # full suite (builds real fixtures)
 python scripts/pilot.py --out pilot          # end-to-end pilot over fixtures
 python -m portagent analyze <game-folder>    # reconnaissance only
 python -m portagent run <game> --oracle o.json
+python -m portagent port <game> -o out.apk   # one command -> signed APK
+python -m portagent portall --work-dir ./all # every strategy class -> summary
 python -m portagent memory --memory <db>
 ```
 
@@ -52,7 +54,9 @@ python -m portagent memory --memory <db>
 - `portagent/analyzer.py` – engine/API/DRM detection + impossibility.
 - `portagent/planner.py` – strategy choice + memory weighting.
 - `portagent/translator.py` – API mapping + generated C shims.
+- `portagent/decompiler.py` – real code recovery (monodis/objdump/jadx/Il2CppDumper).
 - `portagent/optimizer.py` – Android tuning (ABI/backend/heap/DBT) + env.
+- `portagent/runtime.py` – runtime-class planning + payload bundling.
 - `portagent/packager.py` – real signed APK (aapt2/javac/d8/zipalign/apksigner).
 - `portagent/builder.py` – Gradle/NDK scaffold + host compile (legacy path).
 - `portagent/verifier.py` – determinism + scene equivalence.
@@ -70,5 +74,12 @@ python -m portagent memory --memory <db>
 - The game payload goes to `assets/game/**`; `PortActivity` (generated) unpacks
   it on first run. The native shims compile to `lib/arm64-v8a/libportagent.so`
   with NDK clang; the APK is still valid if the native step is skipped.
+- The packager also writes `assets/game/portagent_runtime/env.json` (runtime
+  class + env) whenever a `RuntimeConfig` is passed. `PortActivity` generates a
+  `launchRuntime()` that dispatches on `RUNTIME_CLASS`
+  (`engine_native|mono_managed|dbt_box64|wine_dxvk`). Heavy ARM64 runtime
+  payloads (Box64/Wine/DXVK) are **not** vendored; `scripts/fetch_runtimes.sh`
+  installs them to `~/.portagent-tools/runtime/<class>/` and `RuntimeBundler`
+  copies whatever is present. Never fake a runtime being present.
 - Tests for the packager are skipped (not faked) when the SDK is absent.
 - `*.apk` is git-ignored — never commit build outputs.

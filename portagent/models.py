@@ -56,6 +56,7 @@ class ApiKind(str, enum.Enum):
 class StepName(str, enum.Enum):
     ANALYZE = "ANALYZE"
     CHOOSE = "CHOOSE"
+    DECOMPILE = "DECOMPILE"
     EXECUTE = "EXECUTE"
     VERIFY = "VERIFY"
     LEARN = "LEARN"

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .optimizer import OptimizationPlan
+from .runtime import RuntimeBundler, RuntimeConfig, write_config
 
 PACKAGE = "dev.portagent.port"
 APP_LABEL = "PortAgent Port"
@@ -38,6 +39,8 @@ class PackageResult:
     abis: list[str] = field(default_factory=list)
     asset_files: int = 0
     asset_bytes: int = 0
+    runtime_class: str | None = None
+    runtime_bundled: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     steps: dict[str, str] = field(default_factory=dict)
@@ -52,6 +55,8 @@ class PackageResult:
             "abis": self.abis,
             "asset_files": self.asset_files,
             "asset_bytes": self.asset_bytes,
+            "runtime_class": self.runtime_class,
+            "runtime_bundled": self.runtime_bundled,
             "steps": self.steps,
             "commands": self.commands,
             "logs": self.logs[-40:],
@@ -127,6 +132,7 @@ class ApkPackager:
         plan: OptimizationPlan,
         app_label: str = APP_LABEL,
         package: str = PACKAGE,
+        runtime: RuntimeConfig | None = None,
     ) -> PackageResult:
         res = PackageResult()
         tools = find_android_toolchain()
@@ -147,10 +153,20 @@ class ApkPackager:
         (proj / "compiled").mkdir(parents=True, exist_ok=True)
 
         try:
-            self._write_sources(proj, plan, app_label, package)
+            self._write_sources(proj, plan, app_label, package, runtime)
             self._write_resources(proj, app_label)
             self._copy_shims(proj, translated)
             self._copy_game(proj, game_dir, res, plan)
+            if runtime is not None:
+                res.runtime_class = runtime.runtime_class
+                rt_assets = proj / "assets" / "game" / "portagent_runtime"
+                write_config(runtime, rt_assets)
+                res.runtime_bundled = RuntimeBundler().bundle(runtime, rt_assets)
+                res.steps["runtime"] = (
+                    f"bundled ({len(res.runtime_bundled)} files)"
+                    if res.runtime_bundled
+                    else f"{runtime.runtime_class}: config only (runtime libs not installed)"
+                )
             manifest = self._write_manifest(proj, plan, app_label, package)
 
             # 1) resources
@@ -226,8 +242,13 @@ class ApkPackager:
             return res
 
     # -- sources ----------------------------------------------------------
-    def _write_sources(self, proj: Path, plan: OptimizationPlan, label: str, package: str) -> None:
+    def _write_sources(self, proj: Path, plan: OptimizationPlan, label: str, package: str,
+                       runtime: RuntimeConfig | None = None) -> None:
         jdir = proj / "java" / "dev" / "portagent" / "port"
+        engine = runtime.env.get("PAGENT_ENGINE", label) if runtime else label
+        runtime_class = runtime.runtime_class if runtime else "engine_native"
+        backend = runtime.backend if runtime else plan.graphics_backend
+        entry = runtime.entry or "" if runtime else ""
         (jdir / "PortActivity.java").write_text(
             textwrap.dedent(
                 f"""\
@@ -245,11 +266,14 @@ class ApkPackager:
                 import java.io.InputStream;
                 import java.io.OutputStream;
 
-                /** Runtime layer: unpacks the game payload and starts the port. */
+                /** Runtime layer: unpacks the payload and launches the port. */
                 public class PortActivity extends Activity {{
                     private static final String TAG = "PortAgent";
-                    private static final String ABI = "arm64-v8a";
-                    private static final String ENGINE = "{label}";
+                    private static final String ABI = "{plan.abis[0] if plan.abis else 'arm64-v8a'}";
+                    private static final String ENGINE = "{engine}";
+                    private static final String RUNTIME_CLASS = "{runtime_class}";
+                    private static final String BACKEND = "{backend}";
+                    private static final String ENTRY = "{entry}";
 
                     static {{
                         try {{ System.loadLibrary("portagent"); }}
@@ -276,16 +300,82 @@ class ApkPackager:
                         String payload = "not unpacked";
                         try {{ payload = unpackPayload(); }}
                         catch (IOException e) {{ payload = "unpack error: " + e.getMessage(); }}
-                        Log.i(TAG, "backend=" + backend + " rc=" + rc + " payload=" + payload);
+                        String runtime = launchRuntime();
+                        Log.i(TAG, "runtime=" + RUNTIME_CLASS + " backend=" + backend
+                                + " rc=" + rc + " payload=" + payload + " " + runtime);
 
                         TextView tv = new TextView(this);
                         tv.setText("PortAgent\\n" + ENGINE + "\\n"
+                                + "runtime: " + RUNTIME_CLASS + "\\n"
                                 + "backend: " + backend + "\\n"
                                 + "init rc: " + rc + "\\n"
                                 + "payload: " + payload + "\\n"
-                                + "abi: " + ABI);
+                                + "abi: " + ABI + "\\n\\n" + runtime);
                         tv.setPadding(48, 48, 48, 48);
                         setContentView(tv);
+                    }}
+
+                    /** Dispatches to the right runtime for this title. */
+                    private String launchRuntime() {{
+                        switch (RUNTIME_CLASS) {{
+                            case "engine_native": return launchEngine();
+                            case "mono_managed":  return launchMono();
+                            case "dbt_box64":     return launchBox64();
+                            case "wine_dxvk":     return launchWine();
+                            default:              return "unknown runtime: " + RUNTIME_CLASS;
+                        }}
+                    }}
+
+                    private String launchEngine() {{
+                        return "engine runtime: " + ENGINE + " on " + ENTRY
+                                + " (backend " + BACKEND + ")";
+                    }}
+
+                    private String launchMono() {{
+                        String lib = firstPresentLib("libmonosgen-2.0.so", "libmono-native.so");
+                        if (lib == null) return "mono runtime not bundled; needs libmonosgen-2.0.so";
+                        System.load(lib);
+                        return "mono runtime loaded from " + lib + " -> " + ENTRY;
+                    }}
+
+                    private String launchBox64() {{
+                        String lib = firstPresentLib("libbox64.so");
+                        if (lib == null) return "Box64 not bundled; needs libbox64.so (see scripts/fetch_runtimes.sh)";
+                        System.load(lib);
+                        return "Box64 loaded from " + lib + "; running " + ENTRY;
+                    }}
+
+                    private String launchWine() {{
+                        String box = firstPresentLib("libbox64.so");
+                        String wine = firstPresentLib("libwine.so");
+                        if (box == null || wine == null)
+                            return "Wine/Box64 not bundled; needs libbox64.so + libwine.so"
+                                 + (BACKEND.equals("vulkan") ? " + DXVK" : "");
+                        System.load(box);
+                        System.load(wine);
+                        return "Box64 + Wine loaded; " + ENTRY + " via DXVK";
+                    }}
+
+                    /** Looks for a runtime .so in the unpacked payload. */
+                    private String firstPresentLib(String... names) {{
+                        File game = new File(getFilesDir(), "game");
+                        for (String n : names) {{
+                            for (File f : allFiles(game)) {{
+                                if (f.getName().equals(n)) return f.getAbsolutePath();
+                            }}
+                        }}
+                        return null;
+                    }}
+
+                    private java.util.List<File> allFiles(File dir) {{
+                        java.util.List<File> out = new java.util.ArrayList<>();
+                        File[] kids = dir.listFiles();
+                        if (kids == null) return out;
+                        for (File f : kids) {{
+                            if (f.isDirectory()) out.addAll(allFiles(f));
+                            else out.add(f);
+                        }}
+                        return out;
                     }}
 
                     /** Copies assets/game/** into app-private storage on first launch. */

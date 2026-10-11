@@ -18,6 +18,7 @@ from pathlib import Path
 MINGW64 = shutil.which("x86_64-w64-mingw32-gcc")
 MINGW32 = shutil.which("i686-w64-mingw32-gcc")
 AARCH64 = shutil.which("aarch64-linux-gnu-gcc")
+MCS = shutil.which("mcs")
 
 
 @dataclass
@@ -115,6 +116,40 @@ def _touch(p: Path, data: bytes = b"\x00" * 64) -> None:
     p.write_bytes(data)
 
 
+def _write_assembly(out: Path, source: str) -> bool:
+    """Compile real .NET IL with mcs when available; else a PE stub."""
+    if not MCS:
+        _touch(out, b"\x4d\x5a" + b"\x00" * 2048)
+        return False
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as td:
+        c = Path(td) / "asm.cs"
+        c.write_text(source, encoding="utf-8")
+        p = subprocess.run(
+            [MCS, "-target:library", "-out:" + str(out), str(c)],
+            capture_output=True, text=True,
+        )
+        ok = p.returncode == 0 and out.exists()
+        if not ok:
+            _touch(out, b"\x4d\x5a" + b"\x00" * 2048)
+        return ok
+
+
+_ASSEMBLY_CSHARP = """using System;
+namespace Game {
+  public class Player {
+    public int Health; public string Name;
+    public Player(string n) { Name = n; Health = 100; }
+    public int Damage(int a) { Health -= a; return Health; }
+    public bool Alive() { return Health > 0; }
+  }
+  public class World {
+    public void Update() { var p = new Player("hero"); p.Damage(5); }
+  }
+}
+"""
+
+
 def _unity_il2cpp(root: Path) -> None:
     _write_dll(
         MINGW64,
@@ -136,8 +171,7 @@ def _unity_il2cpp(root: Path) -> None:
 
 
 def _unity_mono(root: Path) -> None:
-    _touch(root / "MonoGame_Data" / "Managed" / "Assembly-CSharp.dll",
-           b"\x4d\x5a" + b"\x00" * 2048)
+    _write_assembly(root / "MonoGame_Data" / "Managed" / "Assembly-CSharp.dll", _ASSEMBLY_CSHARP)
     _touch(root / "MonoGame_Data" / "Mono" / "mono-2.0-sgen.dll",
            b"\x4d\x5a" + b"\x00" * 1024)
     _touch(root / "MonoGame_Data" / "globalgamemanagers", b"\x00" * 512)
@@ -190,9 +224,9 @@ def _godot_dotnet(root: Path) -> None:
                "int main(void){return 0;}\n")
     _touch(root / "Game.pck", b"GDPC" + b"\x00" * 512)
     _touch(root / "GodotSharp.dll", b"\x4d\x5a" + b"\x00" * 1024)
-    # Managed .NET assemblies (PE with a CLI header, no native imports).
+    # Managed .NET assemblies (real IL when mcs is available).
     for name in ("sts2.dll", "System.Private.CoreLib.dll", "Steamworks.NET.dll"):
-        _touch(root / "data_sts2_windows_x86_64" / name, b"\x4d\x5a" + b"\x00" * 512)
+        _write_assembly(root / "data_sts2_windows_x86_64" / name, _ASSEMBLY_CSHARP)
     _write_dll(MINGW64, root / "fmod.dll", "int FMOD_System_Create(void){return 0;}\n")
     _write_dll(MINGW64, root / "steam_api64.dll", "int SteamAPI_Init(void){return 0;}\n")
 

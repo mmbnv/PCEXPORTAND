@@ -15,6 +15,7 @@ from portagent.analyzer import Analyzer
 from portagent.models import ApiKind, Engine, GameProfile, PortStrategy
 from portagent.optimizer import Optimizer
 from portagent.packager import ApkPackager, find_android_toolchain
+from portagent.runtime import RuntimePlanner
 from portagent.translator import Translator
 
 from tests import fixtures_builder
@@ -91,7 +92,9 @@ class PackagerTests(unittest.TestCase):
         work = Path(self.tmp.name) / ("pkg_" + name)
         translated = Translator(work / "tr").translate(profile, strategy)
         plan = Optimizer().plan(profile, strategy)
-        res = ApkPackager(work).package(game, translated, plan, app_label="Test")
+        runtime = RuntimePlanner().plan(profile, strategy, plan)
+        res = ApkPackager(work).package(game, translated, plan, app_label="Test",
+                                       runtime=runtime)
         return res
 
     def test_produces_signed_aligned_apk(self):
@@ -115,6 +118,51 @@ class PackagerTests(unittest.TestCase):
         self.assertIn("classes.dex", names)
         self.assertTrue(any(n.startswith("lib/arm64-v8a/") for n in names))
         self.assertTrue(any(n.startswith("assets/game/") for n in names))
+
+    def test_apk_embeds_runtime_config(self):
+        import json
+        import zipfile
+
+        res = self._package("native_d3d11_x86")
+        self.assertEqual(res.status, "ok", msg=str(res.logs[-3:]))
+        self.assertEqual(res.runtime_class, "dbt_box64")
+        with zipfile.ZipFile(res.apk) as z:
+            cfg = json.loads(z.read("assets/game/portagent_runtime/env.json"))
+        self.assertEqual(cfg["runtime_class"], "dbt_box64")
+        self.assertEqual(cfg["entry"], "IndieGame.exe")
+        self.assertEqual(cfg["env"]["PAGENT_STRATEGY"], "native_dbt_box64")
+
+
+@unittest.skipUnless(find_android_toolchain() is not None,
+                     "Android SDK not installed (set ANDROID_HOME)")
+class UnifiedPipelineTests(unittest.TestCase):
+    """The single command must cover every strategy class end to end."""
+
+    @classmethod
+    def setUpClass(cls):
+        from portagent.cli import _port_one
+
+        cls._port_one = staticmethod(_port_one)
+        cls.tmp = tempfile.TemporaryDirectory()
+        dest = Path(cls.tmp.name) / "fixtures"
+        cls.fixtures = {f.name: f.path for f in fixtures_builder.build_all(dest)}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_each_class_builds_or_is_impossible(self):
+        for name, path in self.fixtures.items():
+            with self.subTest(game=name):
+                work = Path(self.tmp.name) / ("one_" + name)
+                row = self._port_one(path, work)
+                if row["feasible"]:
+                    self.assertEqual(row["status"], "ok", msg=str(row))
+                    self.assertTrue(row["signed"])
+                    self.assertTrue(Path(row["apk"]).is_file())
+                    self.assertTrue(row["runtime"])
+                else:
+                    self.assertEqual(row["status"], "impossible")
 
 
 if __name__ == "__main__":

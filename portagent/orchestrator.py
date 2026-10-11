@@ -15,6 +15,7 @@ from typing import Any
 
 from .analyzer import Analyzer
 from .builder import Builder
+from .decompiler import Decompiler
 from .memory import Memory, profile_signature
 from .models import (
     Engine,
@@ -29,6 +30,7 @@ from .models import (
 from .planner import Planner
 from .optimizer import Optimizer
 from .packager import ApkPackager
+from .runtime import RuntimePlanner
 from .translator import Translator
 from .verifier import Verifier, capture_oracle
 
@@ -167,13 +169,29 @@ class PortAgent:
                 detail={"chosen": chosen.to_dict(), "candidates": [s.to_dict() for s in strategies]},
             )
 
+            # --- DECOMPILE ---
+            dec_dir = self.work_dir / f"iter{iteration}_{chosen.name.value}" / "decompiled"
+            dec = Decompiler(dec_dir).decompile(profile)
+            dec_path = write_json(dec_dir / "decompile_result.json", dec.to_dict())
+            self._emit(
+                StepName.DECOMPILE,
+                inp=chosen.name.value,
+                action="recover code: monodis (IL) / objdump (native asm) / jadx (dex) / Il2CppDumper",
+                result=Result.OK if dec.status == "ok" else Result.PARTIAL,
+                next_="EXECUTE",
+                iteration=iteration,
+                artifacts=[str(dec_path)] + list(dec.outputs.values()),
+                detail=dec.to_dict(),
+            )
+
             # --- EXECUTE ---
             exec_dir = self.work_dir / f"iter{iteration}_{chosen.name.value}"
             translated = Translator(exec_dir).translate(profile, chosen.name)
             plan = Optimizer().plan(profile, chosen.name)
+            runtime = RuntimePlanner().plan(profile, chosen.name, plan)
             build = Builder(exec_dir).build(profile, chosen.name, translated)
             pkg = ApkPackager(exec_dir / "apk").package(
-                game_path, translated, plan, app_label=Path(game_path).name
+                game_path, translated, plan, app_label=Path(game_path).name, runtime=runtime
             )
             apk = pkg.apk or build.apk
             if apk:
@@ -200,6 +218,7 @@ class PortAgent:
                     "build": build.to_dict(),
                     "package": pkg.to_dict(),
                     "optimization": plan.to_dict(),
+                    "runtime": runtime.to_dict(),
                 },
             )
 

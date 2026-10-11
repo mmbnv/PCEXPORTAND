@@ -41,9 +41,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_port(args: argparse.Namespace) -> int:
+    from .decompiler import Decompiler
     from .optimizer import Optimizer
     from .packager import ApkPackager
     from .planner import Planner
+    from .runtime import RuntimePlanner
     from .translator import Translator
 
     game = Path(args.game)
@@ -68,9 +70,16 @@ def _cmd_port(args: argparse.Namespace) -> int:
     strategy = strategies[0].name
     label = game.name if game.is_dir() else game.stem
 
+    decompile = None
+    if not args.no_decompile:
+        decompile = Decompiler(work / "decompiled").decompile(profile)
+
     translated = Translator(work / "translated").translate(profile, strategy)
     plan = Optimizer().plan(profile, strategy)
-    result = ApkPackager(work).package(game, translated, plan, app_label=label)
+    runtime = RuntimePlanner().plan(profile, strategy, plan)
+    result = ApkPackager(work).package(
+        game, translated, plan, app_label=label, runtime=runtime
+    )
 
     apk_out = None
     if result.apk:
@@ -88,6 +97,9 @@ def _cmd_port(args: argparse.Namespace) -> int:
         "aligned": result.aligned,
         "abis": result.abis,
         "assets": {"files": result.asset_files, "bytes": result.asset_bytes},
+        "runtime": runtime.to_dict(),
+        "runtime_bundled": result.runtime_bundled,
+        "decompile": decompile.to_dict() if decompile else {"status": "skipped"},
         "optimization": plan.to_dict(),
         "steps": result.steps,
         "message": (
@@ -100,6 +112,96 @@ def _cmd_port(args: argparse.Namespace) -> int:
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if result.status == "ok" else 1
+
+
+def _port_one(game: Path, work: Path, decompile: bool = True) -> dict:
+    """Run the full single-title pipeline and return a summary dict."""
+    from .decompiler import Decompiler
+    from .optimizer import Optimizer
+    from .packager import ApkPackager
+    from .planner import Planner
+    from .runtime import RuntimePlanner
+    from .translator import Translator
+
+    work.mkdir(parents=True, exist_ok=True)
+    profile = Analyzer(game).analyze()
+    row: dict = {
+        "game": game.name,
+        "engine": profile.engine.value,
+        "arch": profile.arch,
+        "feasible": profile.feasible,
+    }
+    if not profile.feasible:
+        row.update(status="impossible",
+                   blockers=[b.reason for b in profile.blockers])
+        return row
+
+    planner = Planner()
+    strategy = planner.choose(profile)[0].name
+    dec = Decompiler(work / "decompiled").decompile(profile) if decompile else None
+    translated = Translator(work / "translated").translate(profile, strategy)
+    plan = Optimizer().plan(profile, strategy)
+    runtime = RuntimePlanner().plan(profile, strategy, plan)
+    pkg = ApkPackager(work).package(
+        game, translated, plan, app_label=game.name, runtime=runtime
+    )
+    row.update(
+        status=pkg.status,
+        strategy=strategy.value,
+        runtime=runtime.runtime_class,
+        apk=pkg.apk,
+        signed=pkg.signed,
+        aligned=pkg.aligned,
+        abis=pkg.abis,
+        decompile=(dec.status if dec else "skipped"),
+        tools_used=(dec.tools_used if dec else []),
+    )
+    return row
+
+
+def _cmd_portall(args: argparse.Namespace) -> int:
+    """One command over every strategy class: build all fixtures end-to-end."""
+    import tempfile
+
+    from tests import fixtures_builder
+
+    games = [Path(g) for g in (args.games or [])]
+    tmp_ctx = None
+    if not games:
+        tmp_ctx = tempfile.TemporaryDirectory()
+        fx_root = Path(tmp_ctx.name) / "fixtures"
+        fixtures = fixtures_builder.build_all(fx_root)
+        games = [f.path for f in fixtures]
+        expected = {f.path.name: f.expect_feasible for f in fixtures}
+    else:
+        expected = {g.name: True for g in games}
+
+    work_root = Path(args.work_dir)
+    rows = []
+    for g in games:
+        row = _port_one(g, work_root / g.name, decompile=not args.no_decompile)
+        row["expected_feasible"] = expected.get(g.name, True)
+        rows.append(row)
+
+    ok = 0
+    for r in rows:
+        good = (r["status"] == "ok" and r["expected_feasible"]) or (
+            r["status"] == "impossible" and not r["expected_feasible"]
+        )
+        r["verdict"] = "ok" if good else "FAIL"
+        ok += good
+
+    summary = {
+        "command": "portall",
+        "total": len(rows),
+        "ok": ok,
+        "failed": len(rows) - ok,
+        "rows": rows,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if tmp_ctx is not None:
+        tmp_ctx.cleanup()
+    return 0 if ok == len(rows) else 1
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
@@ -147,7 +249,17 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("game", help="game folder or installer file")
     po.add_argument("-o", "--output", default=None, help="output .apk path")
     po.add_argument("--work-dir", default="portagent_out")
+    po.add_argument("--no-decompile", action="store_true", help="skip code recovery")
     po.set_defaults(func=_cmd_port)
+
+    pa = sub.add_parser(
+        "portall",
+        help="one command over every strategy class: build all fixtures -> APKs",
+    )
+    pa.add_argument("games", nargs="*", help="game folders (default: built-in fixtures)")
+    pa.add_argument("--work-dir", default="portagent_all")
+    pa.add_argument("--no-decompile", action="store_true", help="skip code recovery")
+    pa.set_defaults(func=_cmd_portall)
     return p
 
 
