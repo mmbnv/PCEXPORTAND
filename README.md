@@ -68,6 +68,8 @@ powershell -ExecutionPolicy Bypass -File scripts\bootstrap_android.ps1
 
 The script prints the `setx ANDROID_HOME …` lines to run. The menu and GUI both
 show an `sdk:` status line (`ready` / `MISSING`) so you know before building.
+No `git` or repo access? A copy-paste install block and the Android Studio
+shortcut are in `docs/USAGE.md` section 7.
 
 ## Pilot
 

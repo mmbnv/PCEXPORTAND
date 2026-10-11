@@ -369,6 +369,42 @@ powershell -ExecutionPolicy Bypass -File scripts\bootstrap_android.ps1 -Full
 build-tools, platform, NDK и cmake, а затем **напечатает готовые команды**
 `setx ANDROID_HOME …`. Выполните их, перезапустите терминал — и можно собирать.
 
+**Если нет `git` или нет доступа к репозиторию** — скрипт не обязателен,
+тулчейн ставится напрямую. Вставьте это в PowerShell целиком:
+
+```powershell
+$ErrorActionPreference = "Continue"
+$Tools = Join-Path $env:USERPROFILE ".portagent-tools"
+$AndroidSdk = Join-Path $Tools "android-sdk"
+New-Item -ItemType Directory -Force -Path $Tools | Out-Null
+$cmdline = Join-Path $AndroidSdk "cmdline-tools\latest"
+if (-not (Test-Path $cmdline)) {
+    $tmp = Join-Path $env:TEMP ("pag_cmdline_" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    Invoke-WebRequest -Uri "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip" -OutFile (Join-Path $tmp "cmdline.zip")
+    Expand-Archive -Path (Join-Path $tmp "cmdline.zip") -DestinationPath $tmp -Force
+    New-Item -ItemType Directory -Force -Path (Join-Path $AndroidSdk "cmdline-tools") | Out-Null
+    Move-Item (Join-Path $tmp "cmdline-tools") $cmdline
+    Remove-Item -Recurse -Force $tmp
+}
+$env:ANDROID_HOME = $AndroidSdk; $env:ANDROID_SDK_ROOT = $AndroidSdk
+$sdkmanager = Join-Path $cmdline "bin\sdkmanager.bat"
+1..30 | ForEach-Object { "y" } | & $sdkmanager "--sdk_root=$AndroidSdk" --licenses 2>&1 | Out-Null
+& $sdkmanager "--sdk_root=$AndroidSdk" "platform-tools" "build-tools;34.0.0" "platforms;android-34" "ndk;26.1.10909125" "cmake;3.22.1" 2>&1 | Out-Null
+setx ANDROID_HOME "$AndroidSdk"; setx ANDROID_SDK_ROOT "$AndroidSdk"
+```
+
+Затем **откройте новый терминал** и проверьте:
+`python -c "from portagent.packager import find_android_toolchain as f; print(f())"`.
+
+**Если уже установлен Android Studio** — ничего скачивать не нужно, укажите её
+SDK (обычно он уже содержит build-tools и platform):
+
+```powershell
+setx ANDROID_HOME "$env:LOCALAPPDATA\Android\Sdk"
+setx ANDROID_SDK_ROOT "$env:LOCALAPPDATA\Android\Sdk"
+```
+
 После установки добавьте в окружение (версию NDK посмотрите в
 `$ANDROID_HOME/ndk/`):
 
