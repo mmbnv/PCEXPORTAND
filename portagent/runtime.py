@@ -13,11 +13,12 @@ classes, chosen from the analyzed profile and the planner's strategy:
                      the original executable on ARM64.
   ``wine_dxvk``      native Windows title with D3D: Box64 + Wine + DXVK/VKD3D.
 
-The runtime *binaries* (libbox64, wine, dxvk .so files) are large ARM64 builds
-that are not vendored in this repo.  ``RuntimeBundler`` copies them from
-``~/.portagent-tools/runtime/<class>/`` when the operator has fetched them
-(see ``scripts/fetch_runtimes.sh``); otherwise the config is still complete and
-the app reports exactly which library is missing -- it never pretends to run.
+The runtime *binaries* are large ARM64 (and x86-64-under-Box64) builds that are
+not vendored in this repo.  ``RuntimeBundler`` copies them from
+``~/.portagent-tools/runtime/<class>/`` when the operator has fetched them with
+``python -m portagent.runtimes`` (a pinned Winlator release); otherwise the
+config is still complete and the app reports exactly which binary is missing --
+it never pretends to run.
 """
 
 from __future__ import annotations
@@ -38,15 +39,17 @@ RUNTIME_LIBS: dict[str, list[str]] = {
     "engine_native": ["libgodot_android.so", "libunity.so", "libUnreal.so", "libmain.so"],
     "mono_managed": ["libmonosgen-2.0.so", "libmono-native.so", "libmonobdwgc-2.0.so"],
     "dbt_box64": ["libbox64.so", "box64"],
-    "wine_dxvk": ["libbox64.so", "box64", "wine", "libwine.so", "dxvk", "d3d11.dll", "dxgi.dll"],
+    "wine_dxvk": ["box64", "wine", "wineserver"],
 }
 
+# Engine titles whose sources we do NOT have cannot be re-exported to Android;
+# they run through the Box64 + Wine + DXVK container like any other x86 game.
 _ENGINE_RUNTIME = {
-    Engine.GODOT: "engine_native",
-    Engine.UNITY: "engine_native",
-    Engine.UNREAL: "engine_native",
-    Engine.GAMEMAKER: "engine_native",
-    Engine.RPGMAKER: "engine_native",
+    Engine.GODOT: "wine_dxvk",
+    Engine.UNITY: "wine_dxvk",
+    Engine.UNREAL: "wine_dxvk",
+    Engine.GAMEMAKER: "wine_dxvk",
+    Engine.RPGMAKER: "wine_dxvk",
 }
 
 
@@ -92,7 +95,10 @@ class RuntimePlanner:
         if profile.engine in _ENGINE_RUNTIME:
             cfg.runtime_class = _ENGINE_RUNTIME[profile.engine]
             cfg.entry = self._entry(profile)
-            cfg.notes.append(f"{profile.engine.value}: run the engine's ARM64 runtime on the data pack")
+            cfg.notes.append(
+                f"{profile.engine.value}: no sources, so run the shipped x86/x64 build "
+                "through the Box64 + Wine + DXVK container"
+            )
         elif profile.managed or strategy == PortStrategy.DOTNET_TRANSPILE:
             cfg.runtime_class = "mono_managed"
             cfg.entry = self._managed_entry(profile)

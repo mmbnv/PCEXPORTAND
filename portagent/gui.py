@@ -87,6 +87,11 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
         self.sdk_label.pack(anchor="w", padx=10)
         self._refresh_sdk_status()
 
+        self.rt_var = tk.StringVar(value="")
+        self.rt_label = ttk.Label(self, textvariable=self.rt_var, foreground="#a00")
+        self.rt_label.pack(anchor="w", padx=10)
+        self._refresh_runtime_status()
+
         stats = ttk.LabelFrame(self, text="Stats")
         stats.pack(fill="x", **pad)
         self.stats_text = tk.Text(stats, height=9, wrap="word", state="disabled",
@@ -123,6 +128,22 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
                 "(Windows: scripts\\bootstrap_android.ps1)"
             )
             self.sdk_label.configure(foreground="#a00")
+
+    def _refresh_runtime_status(self) -> None:
+        from portagent import runtimes
+
+        info = runtimes.info()
+        if info.get("ready"):
+            self.rt_var.set(
+                f"ARM64 runtime: ready ({info.get('box64_version') or 'box64 + wine + dxvk'})"
+            )
+            self.rt_label.configure(foreground="#0a6")
+        else:
+            self.rt_var.set(
+                "ARM64 runtime: NOT fetched - click 'Build APK' to download it once "
+                "(~475 MB, Box64 + Wine + DXVK)"
+            )
+            self.rt_label.configure(foreground="#a00")
 
     def log_line(self, text: str) -> None:
         self.log.configure(state="normal")
@@ -198,6 +219,8 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
                     messagebox.showerror("PortAgent", str(payload))
                 elif kind == "done":
                     self._busy(False)
+                elif kind == "refresh_runtime":
+                    self._refresh_runtime_status()
         except queue.Empty:
             pass
         self.after(100, self._drain_queue)
@@ -232,12 +255,22 @@ class PortAgentGUI(tk.Tk if _TK_AVAILABLE else object):  # type: ignore[misc]
         self.work.mkdir(parents=True, exist_ok=True)
 
         def task() -> None:
+            from portagent import runtimes
+
+            if not runtimes.runtime_ready():
+                self._queue.put(("log", "ARM64 runtime missing - fetching it once "
+                                        "(~475 MB, cached in ~/.portagent-tools) ..."))
+                fetched = runtimes.fetch_runtimes(progress=self._progress)
+                if not fetched.ok:
+                    self._queue.put(("log", "runtime fetch did not fully succeed; "
+                                            "the APK will still build but cannot launch"))
             self.summary = launcher.run_port(
                 self.game, self.work, decompile=not self.no_decompile.get(),
                 progress=self._progress, profile=None)
             self._queue.put(("log", f"summary: {self.summary.get('status')} "
                                     f"apk={self.summary.get('apk')}"))
             self._queue.put(("stats", self.summary))
+            self._queue.put(("refresh_runtime", None))
 
         self._run("BUILD APK", task)
 

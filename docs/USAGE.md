@@ -22,15 +22,30 @@ ANALYZE → CHOOSE → EXECUTE → VERIFY → LEARN   (и снова)
 - определяет движок (Unity, Unreal, Godot, RPG Maker…), графический и звуковой
   API, DRM и анти-чит;
 - подбирает стратегию порта и учитывает прошлый опыт;
+- **для игр без исходников** собирает настоящий Android-контейнер: скачивает
+  ARM64-стек (Box64 + Wine + DXVK + Turnip), кладёт его в APK вместе с игрой и
+  генерирует `PortActivity`, который реально запускает `box64 → wine → игра.exe`
+  на устройстве (это тот же подход, что в Winlator);
 - генерирует C-прослойку (Win32→POSIX, D3D→Vulkan, звук→AAudio) и собирает её;
 - разворачивает настоящий Gradle/NDK-проект;
 - проверяет результат на наборе сцен и сравнивает с эталоном;
 - честно говорит `UNKNOWN`, если доказать эквивалентность не может.
 
+Как это работает для игры без исходников (например, коммерческой x86/x64):
+
+```
+game.exe --(Wine)--> Win32/NT --(Box64)--> ARM64 --(DXVK/VKD3D)--> Vulkan --(Turnip)--> GPU
+```
+
+Контейнер — это единственный путь, который **исполняет** уже собранную игру на
+телефоне. Точность «кадр в кадр» при этом не гарантируется: трансляция x86→ARM64
+медленнее нативного кода, и часть игр (анти-чит, DRM уровня ядра) не пойдёт
+вовсе — такие честно помечаются как `impossible`.
+
 Чего пока **нет** (важно понимать):
 
-- он не превращает «любую игру» в APK одним нажатием — полная автоматическая
-  реконструкция кода это следующий этап;
+- нет гарантии «любая игра» — эмуляционный слой работает для большинства игр,
+  но не для всех, и производительность зависит от устройства;
 - без эталона (oracle) проверка вернёт `UNKNOWN`, а не `PASS`;
 - сборка подписанного APK требует установленного Android SDK/NDK.
 
@@ -69,7 +84,9 @@ python -m portagent gui  # открыть окно напрямую
 
 1. Выбрать папку с игрой или установщик (кнопка «Choose folder…» / пункт 1).
 2. Нажать **Analyze** — увидеть движок, архитектуру, блокеры и вердикт.
-3. Нажать **Build APK** — собрать подписанный APK и посмотреть статистику.
+3. Нажать **Build APK** — собрать подписанный APK. При первом запуске PortAgent
+   сам скачает ARM64-стек (Box64 + Wine + DXVK, ~475 МБ, один раз, в
+   `~/.portagent-tools`) и вложит его в APK.
 4. Нажать **Run full loop** — прогнать полный цикл (нужен oracle для PASS).
 5. Скопировать или сохранить отчёт (**Copy report / Save report…**) и прислать
    его мне — в отчёте уже есть версия Python, какие инструменты найдены и все
@@ -77,6 +94,19 @@ python -m portagent gui  # открыть окно напрямую
 
 Окно требует Tkinter (Debian/Ubuntu: `apt-get install python3-tk`). Само меню
 `python run.py` работает и без него.
+
+### Стек рантайма (один раз)
+
+Для игр **без исходников** нужен ARM64-стек эмуляции. Он скачивается один раз:
+
+```bash
+python -m portagent fetch-runtimes      # Box64 + Wine + DXVK + Turnip, ~475 МБ
+python -m portagent fetch-runtimes --info
+```
+
+Меню и GUI вызывают это автоматически при первой сборке. Стек берётся из
+зафиксированного релиза Winlator 11.2.0 и проверяется по SHA-256 и по
+архитектуре ELF (`box64` — aarch64, `wine` — x86-64 под Box64).
 
 ### Командная строка
 
@@ -111,19 +141,20 @@ python -m portagent port "C:\Games\MyGame" -o MyGame.apk
 {
   "status": "ok",
   "engine": "godot",
-  "strategy": "godot_android",
+  "strategy": "wine_winlator",
   "apk": "MyGame.apk",
-  "apk_size": 320615,
+  "apk_size": 560510587,
   "signed": true,
   "aligned": true,
   "abis": ["arm64-v8a"],
   "assets": {"files": 8, "bytes": 291304},
-  "runtime": {"runtime_class": "engine_native", "entry": "GodotGame.exe",
+  "runtime": {"runtime_class": "wine_dxvk", "entry": "GodotGame.exe",
               "backend": "vulkan", "translation": "dxvk"},
-  "runtime_bundled": [],
+  "runtime_bundled": ["box64/usr/local/bin/box64", "rootfs/opt/wine/bin/wine",
+                      "dxvk/system32/d3d11.dll", "..."],
   "decompile": {"status": "ok", "tools_used": ["monodis", "objdump"]},
-  "optimization": {"graphics_backend": "vulkan", "heap_mb": 512, "dbt": false},
-  "steps": {"runtime": "engine_native: config only (runtime libs not installed)",
+  "optimization": {"graphics_backend": "vulkan", "heap_mb": 512, "dbt": true},
+  "steps": {"runtime": "bundled (3167 files: box64 + wine + dxvk)",
             "aapt2_compile": "ok", "aapt2_link": "ok", "javac": "ok",
             "d8": "ok", "native_arm64-v8a": "ok", "assemble": "ok",
             "zipalign": "ok", "sign": "ok"}
@@ -134,25 +165,31 @@ python -m portagent port "C:\Games\MyGame" -o MyGame.apk
 
 ```
 AndroidManifest.xml                 ландшафтная активность-лаунчер
-classes.dex                         встроенный слой запуска (PortActivity)
+classes.dex                         PortActivity: распаковка + запуск контейнера
 lib/arm64-v8a/libportagent.so       собранные NDK-прослойки совместимости
 assets/game/**                      вся игра; распаковывается при первом запуске
-assets/game/portagent_runtime/      класс запуска + env.json (+ библиотеки)
+assets/runtime/**                   ARM64-стек: box64 + wine rootfs + dxvk + turnip
 ```
 
 **Класс запуска** выбирается автоматически по результату анализа:
 
 | Класс | Для чего | Что делает |
 |---|---|---|
-| `engine_native` | Unity / Unreal / Godot / GameMaker / RPG Maker | запускает родной ARM64-рантайм движка на данных игры |
+| `wine_dxvk` | нативные Windows/x86/x64 игры без исходников (в т.ч. Unity/Unreal/Godot-сборки) | скачивает и встраивает ARM64-стек; `PortActivity` распаковывает его и запускает `loader → box64 → wine → игра.exe` с DXVK/VKD3D и Turnip |
+| `dbt_box64` | нативные x86/x64 без Windows-API | запускает оригинальный exe через Box64 (DBT) |
+| `engine_native` | только если есть исходники движка | запускает родной ARM64-рантайм движка на данных игры |
 | `mono_managed` | игры на .NET / Mono | поднимает Mono и грузит восстановленные сборки |
-| `dbt_box64` | нативные x86/x64 | запускает оригинальный exe через Box64 (DBT) |
-| `wine_dxvk` | нативные Windows + D3D | Box64 + Wine + DXVK/VKD3D |
 
-Тяжёлые ARM64-рантаймы (Box64, Wine, DXVK) **не лежат в репозитории**;
-`scripts/fetch_runtimes.sh` кладёт их в `~/.portagent-tools/runtime/<класс>/`, и
-упаковщик встраивает то, что установлено. Если рантайма нет, приложение прямо
-пишет, какой библиотеки не хватает — оно не делает вид, что игра запущена.
+Для игры **без исходников** PortAgent всегда выбирает `wine_dxvk`: это
+единственный путь, который реально исполняет уже собранный x86/x64-бинарник на
+ARM64.
+
+Тяжёлые ARM64-рантаймы (Box64, Wine, DXVK, Turnip) **не лежат в репозитории**.
+Команда `python -m portagent fetch-runtimes` (или первая сборка через меню/GUI)
+скачивает их из зафиксированного релиза Winlator 11.2.0 в
+`~/.portagent-tools/runtime/wine_dxvk/`. Упаковщик встраивает их в APK как
+`assets/runtime/**`. Если рантайма нет, приложение прямо пишет, какой бинарник
+не найден — оно не делает вид, что игра запущена.
 
 **Этап DECOMPILE** реально восстанавливает код: `monodis` даёт IL управляемых
 сборок, `objdump` — дизассемблер нативных файлов, `jadx` — исходники DEX,
@@ -161,11 +198,19 @@ assets/game/portagent_runtime/      класс запуска + env.json (+ би
 
 APK проходит `apksigner verify` (схемы v2 и v3) и `zipalign -c`.
 
-**Что это честно делает:** создаёт валидное устанавливаемое приложение,
-которое несёт игру, слой совместимости и слой запуска, и оптимизирует его под
-телефон. **Чего ещё не делает:** не компилирует восстановленную логику обратно в
-нативную ARM64-игру — это следующий этап (связка Decompiler → Translator →
-пересборка).
+**Что это честно делает:** собирает валидный подписанный APK, который несёт игру
+и полный ARM64-стек и запускает игру на arm64-v8a устройстве через
+Box64 + Wine + DXVK. **Чего ещё не делает:** не проверяет эквивалентность
+«кадр в кадр» без эталонной трассы с устройства (для этого нужен oracle), и не
+гарантирует, что конкретная игра не упрётся в анти-чит или DRM уровня ядра —
+такие помечаются `impossible`.
+
+Проверить, что APK действительно несёт рабочий стек, можно так:
+
+```bash
+unzip -l MyGame.apk | grep -E "assets/runtime/(box64|rootfs)|assets/game/"
+unzip -p MyGame.apk assets/runtime/box64/usr/local/bin/box64 | file -   # ARM aarch64
+```
 
 Требуется Android SDK/NDK — поставьте его скриптом из раздела 7.
 

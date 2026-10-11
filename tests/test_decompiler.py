@@ -69,9 +69,17 @@ class RuntimePlannerTests(unittest.TestCase):
         opt = Optimizer().plan(prof, strategy)
         return RuntimePlanner().plan(prof, strategy, opt)
 
-    def test_engine_title_uses_engine_runtime(self):
+    def test_engine_title_without_sources_uses_container(self):
+        # We do not have the engine's sources, so a Godot/Unity/Unreal build runs
+        # through the Box64 + Wine + DXVK container, not a native re-export.
+        cfg = self._plan(engine=Engine.GODOT, strategy=PortStrategy.WINE_WINLATOR)
+        self.assertEqual(cfg.runtime_class, "wine_dxvk")
+
+    def test_engine_title_with_export_strategy_still_uses_container(self):
+        # Even if the planner nominates the engine-export strategy, the runtime
+        # layer routes the source-less build to the container.
         cfg = self._plan(engine=Engine.GODOT, strategy=PortStrategy.GODOT_ANDROID)
-        self.assertEqual(cfg.runtime_class, "engine_native")
+        self.assertEqual(cfg.runtime_class, "wine_dxvk")
 
     def test_native_dbt_title(self):
         cfg = self._plan(engine=Engine.CUSTOM_NATIVE, strategy=PortStrategy.NATIVE_DBT_BOX64)
