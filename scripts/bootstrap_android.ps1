@@ -65,8 +65,7 @@ if (Test-Path $sdkmanager) {
     Log "accepting licenses ..."
     # Native tools write to stderr; don't let that abort the script.
     $ErrorActionPreference = "Continue"
-    $yes = ("y`n" * 20)
-    $yes | & $sdkmanager "--sdk_root=$AndroidSdk" --licenses 2>&1 | Out-Null
+    1..30 | ForEach-Object { "y" } | & $sdkmanager "--sdk_root=$AndroidSdk" --licenses 2>&1 | Out-Null
     Log "installing platform-tools, build-tools:$BtVersion, platforms;$Platform, ndk, cmake ..."
     & $sdkmanager "--sdk_root=$AndroidSdk" "platform-tools" "build-tools;$BtVersion" `
         "platforms;$Platform" "cmake;3.22.1" 2>&1 | Out-Null
