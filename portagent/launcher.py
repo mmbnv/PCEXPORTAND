@@ -76,8 +76,13 @@ def run_port(
     decompile: bool = True,
     progress: ProgressFn | None = None,
     profile: GameProfile | None = None,
+    device: str | None = None,
 ) -> dict[str, Any]:
     """Build an installable APK for ``game`` and return a summary dict.
+
+    ``device`` selects the tuning target: None/'auto' auto-detects a connected
+    adb device (else the local machine), a path to a prop JSON, or inline
+    ``key=value`` props.
 
     Raises FileNotFoundError if the game path does not exist.
     """
@@ -157,11 +162,18 @@ def run_port(
     t = time.time()
     _emit(progress, "EXECUTE", "translating APIs -> C shims ...")
     translated = Translator(work / "translated").translate(profile, strategy)
-    plan = Optimizer().plan(profile, strategy)
+    from .device import describe as describe_device
+    from .device import resolve as resolve_device
+    from .device import tune as tune_device
+
+    dev = resolve_device(device)
+    plan = Optimizer().plan(profile, strategy, device=dev)
     runtime = RuntimePlanner().plan(profile, strategy, plan)
+    _emit(progress, "CHOOSE", describe_device(dev, tune_device(dev)))
     _emit(progress, "EXECUTE",
           f"runtime={runtime.runtime_class} backend={plan.graphics_backend} "
-          f"dbt={plan.dbt} heap={plan.heap_mb}MB")
+          f"dbt={plan.dbt} heap={plan.heap_mb}MB render={plan.render_width}x"
+          f"{plan.render_height} fps_cap={plan.fps_cap}")
 
     _emit(progress, "EXECUTE", "packaging signed APK (aapt2/d8/zipalign/apksigner) ...")
     label = game.name if game.is_dir() else game.stem
@@ -216,6 +228,7 @@ def run_port(
         "runtime_bundled": result.runtime_bundled,
         "decompile": decompile_result.to_dict() if decompile_result else {"status": "skipped"},
         "optimization": plan.to_dict(),
+        "device": dev.to_dict(),
         "steps": result.steps,
         "logs": result.logs[-20:],
         "timings": timings,

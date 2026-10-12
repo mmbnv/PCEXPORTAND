@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 
 from .models import ApiKind, Engine, GameProfile, PortStrategy
@@ -154,6 +155,17 @@ class RuntimePlanner:
 class RuntimeBundler:
     """Copies prebuilt ARM64 runtime payloads into the APK assets tree."""
 
+    # Paths that are never needed at run time but bloat the APK.  Matching is on
+    # the POSIX-relative path (any path component equals one of these, or the
+    # filename matches a glob).
+    _SKIP_DIRS = {
+        "doc", "man", "info", "getconf", "i18n", "pkgconfig", "cmake",
+        "terminfo", "zoneinfo", "X11", "fonts",
+    }
+    _SKIP_GLOBS = ("*.a", "*.la", "*.o", "*.pc", "*.h", "*.mrk", "*.def",
+                   "*.chm", "*.pdf", "*.html", "*.1", "*.3", "*.5",
+                   "winedbg*", "wineconsole*", "*.pdb")
+
     def __init__(self, home: Path | None = None):
         self.home = Path(home) if home else RUNTIME_HOME
 
@@ -161,11 +173,24 @@ class RuntimeBundler:
         d = self.home / runtime_class
         return d.is_dir() and any(d.iterdir())
 
-    def bundle(self, cfg: RuntimeConfig, dest: Path) -> list[str]:
+    @classmethod
+    def _keep(cls, rel: Path) -> bool:
+        for part in rel.parts[:-1]:
+            if part in cls._SKIP_DIRS:
+                return False
+        name = rel.name
+        for pat in cls._SKIP_GLOBS:
+            if fnmatch(name, pat):
+                return False
+        return True
+
+    def bundle(self, cfg: RuntimeConfig, dest: Path, *, prune: bool = True) -> list[str]:
         """Copy ``~/.portagent-tools/runtime/<class>/`` into ``dest``.
 
         Returns the list of copied files.  Empty when nothing is installed --
         which is honest: the app will then report the missing runtime by name.
+        With ``prune`` (default) docs/man/locales/static libs are skipped to keep
+        the APK small; the executables and shared libraries are never touched.
         """
         src = self.home / cfg.runtime_class
         if not src.is_dir():
@@ -176,6 +201,8 @@ class RuntimeBundler:
             if not item.is_file():
                 continue
             rel = item.relative_to(src)
+            if prune and not self._keep(rel):
+                continue
             out = dest / rel
             out.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, out)

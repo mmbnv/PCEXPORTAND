@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .device import DeviceProfile, tune
 from .models import ApiKind, Engine, GameProfile, PortStrategy
 
 
@@ -32,6 +33,12 @@ class OptimizationPlan:
     extract_native_libs: bool = True
     compress_assets: bool = True
     notes: list[str] = field(default_factory=list)
+    # Device-aware tuning (filled when a DeviceProfile is supplied).
+    device: dict = field(default_factory=dict)
+    device_env: dict[str, str] = field(default_factory=dict)
+    render_width: int = 0
+    render_height: int = 0
+    fps_cap: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +54,9 @@ class OptimizationPlan:
             "strip_symbols": self.strip_symbols,
             "extract_native_libs": self.extract_native_libs,
             "compress_assets": self.compress_assets,
+            "device": self.device,
+            "render": f"{self.render_width}x{self.render_height}" if self.render_width else None,
+            "fps_cap": self.fps_cap or None,
             "notes": self.notes,
         }
 
@@ -69,11 +79,14 @@ class OptimizationPlan:
             if self.graphics_translation == "dxvk":
                 env["DXVK_ASYNC"] = "1"
                 env["DXVK_STATE_CACHE"] = "1"
+        # Device tuning is applied last so it overrides the generic defaults.
+        env.update(self.device_env)
         return env
 
 
 class Optimizer:
-    def plan(self, profile: GameProfile, strategy: PortStrategy) -> OptimizationPlan:
+    def plan(self, profile: GameProfile, strategy: PortStrategy,
+             device: DeviceProfile | None = None) -> OptimizationPlan:
         p = OptimizationPlan()
         # Native engines ship first-party Android exporters -> Vulkan where sane.
         if profile.engine in (Engine.GODOT, Engine.UNITY, Engine.UNREAL):
@@ -94,4 +107,17 @@ class Optimizer:
         if profile.total_size > 8 * 1024**3:
             p.compress_assets = True
             p.notes.append("large game (>8 GiB): assets compressed in the APK")
+
+        # Device-aware tuning wins over the generic defaults: the phone is what
+        # actually has to run this.
+        if device is not None:
+            t = tune(device)
+            p.device = device.to_dict()
+            p.render_width, p.render_height = t.render_width, t.render_height
+            p.fps_cap = t.fps_cap
+            p.heap_mb = max(p.heap_mb, t.heap_mb)
+            p.threads = min(p.threads, int(t.env.get("BOX64_MAX_CPU", p.threads)))
+            p.large_heap = True
+            p.device_env = t.env
+            p.notes.extend(t.notes)
         return p

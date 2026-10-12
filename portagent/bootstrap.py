@@ -109,6 +109,23 @@ def _extract_tar(archive: Path, dest: Path) -> None:
         tf.extractall(dest, filter="data")
 
 
+def _extract_archive(archive: Path, dest: Path) -> None:
+    """Unpack a zip/gzip/tar archive, choosing the reader by magic bytes.
+
+    The caller names the cached file ``jdk.zip`` regardless of the real format,
+    and the Adoptium API redirects ``/jdk/17/...`` to a ``.tar.gz`` — so trusting
+    the suffix makes ``zipfile`` choke with "File is not a zip file".
+    """
+    with archive.open("rb") as fh:
+        magic = fh.read(4)
+    if magic[:2] == b"\x1f\x8b" or magic[:2] == b"BZ" or magic[:2] == b"\xfd7":
+        _extract_tar(archive, dest)
+    elif magic[:2] == b"PK":
+        _unzip(archive, dest)
+    else:
+        raise RuntimeError(f"unrecognized archive format for {archive}")
+
+
 # ---------------------------------------------------------------------------
 # JDK
 # ---------------------------------------------------------------------------
@@ -161,12 +178,10 @@ def ensure_jdk(home: Path, progress=None) -> Path | None:
 
     url = _jdk_url()
     archive = home / "cache" / "jdk.zip"
-    _download(url, archive, progress, label=f"JDK {JDK_FEATURE} (Temurin)")
+    if not archive.is_file():
+        _download(url, archive, progress, label=f"JDK {JDK_FEATURE} (Temurin)")
     dest = home / "jdk"
-    if archive.suffix == ".zip":
-        _unzip(archive, dest)
-    else:
-        _extract_tar(archive, dest)
+    _extract_archive(archive, dest)
     found = _find_java_home(dest)
     if found is None:
         raise RuntimeError("no javac found after unpacking the JDK archive")

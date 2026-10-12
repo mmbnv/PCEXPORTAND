@@ -70,9 +70,20 @@ def _run(cmd: list[str], cwd: str | Path | None = None, timeout: int = 1800) -> 
     argv = list(cmd)
     if os.name == "nt" and argv and Path(argv[0]).suffix.lower() in (".bat", ".cmd"):
         argv = ["cmd", "/c", *argv]
+    # The build-tools wrappers (d8/apksigner) shell out to a bare ``java``; a
+    # bootstrapped JDK is not on PATH, so make sure its bin/ is visible.
+    env = os.environ.copy()
+    java_home = env.get("JAVA_HOME")
+    if java_home and isinstance(java_home, str):
+        # Use os.path (not pathlib): under a simulated Windows os.name the
+        # pathlib flavour flips to WindowsPath, which cannot be built on Linux.
+        jbin = os.path.join(java_home, "bin")
+        if jbin not in env.get("PATH", "").split(os.pathsep):
+            env["PATH"] = jbin + os.pathsep + env.get("PATH", "")
     try:
         p = subprocess.run(
-            argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout
+            argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True,
+            timeout=timeout, env=env,
         )
         return p.returncode, (p.stdout + p.stderr)
     except FileNotFoundError:
@@ -482,285 +493,42 @@ class ApkPackager:
     def _write_container_activity(self, jdir: Path, package: str, label: str, engine: str,
                                   entry: str, plan: OptimizationPlan,
                                   runtime: RuntimeConfig | None) -> None:
-        """Generate a launcher that runs the real Box64 + Wine + DXVK stack.
+        """Generate the launcher that runs the real Box64 + Wine + DXVK stack.
 
         The APK carries, under ``assets/runtime/``, the ARM64 ``box64`` and the
-        Wine ``rootfs``; the game itself sits under ``assets/game/``.  On first
-        launch everything is unpacked to app-private storage (a real filesystem,
-        required for ``execve``), then ``box64 wine <game.exe>`` is started with
-        the DXVK / Turnip environment.  Nothing is faked: if a piece is missing
-        the Activity says exactly which one.
+        Wine ``rootfs``; the game itself sits under ``assets/game/``.  Everything
+        is unpacked to app-private storage (a real filesystem, required for
+        ``execve``), then ``box64 wine <game.exe>`` is started.
+
+        The generated classes (see ``java_templates``) run the heavy work in a
+        **foreground service** off the UI thread, detect the device at run time,
+        pick a render size / frame cap / heap / dynarec level / GPU driver that
+        fit it, and name any missing piece (e.g. an X server) on screen instead
+        of showing a grey or black frame.
         """
+        from . import java_templates as jt
+
         abi = plan.abis[0] if plan.abis else "arm64-v8a"
         backend = runtime.backend if runtime else plan.graphics_backend
         jdir.mkdir(parents=True, exist_ok=True)
-        (jdir / "PortActivity.java").write_text(
-            textwrap.dedent(
-                f"""\
-                package {package};
-
-                import android.app.Activity;
-                import android.content.res.AssetManager;
-                import android.os.Bundle;
-                import android.util.Log;
-                import android.view.WindowManager;
-                import android.widget.TextView;
-                import java.io.BufferedReader;
-                import java.io.File;
-                import java.io.FileOutputStream;
-                import java.io.IOException;
-                import java.io.InputStream;
-                import java.io.InputStreamReader;
-                import java.io.OutputStream;
-                import java.util.ArrayList;
-                import java.util.List;
-
-                /**
-                 * PC-game container: Box64 (x86/x64 -> ARM64) + Wine (Win32) +
-                 * DXVK/VKD3D (D3D -> Vulkan). This is the Winlator approach, done
-                 * in one Activity.
-                 */
-                public class PortActivity extends Activity {{
-                    private static final String TAG = "PortAgent";
-                    private static final String ABI = "{abi}";
-                    private static final String ENGINE = "{engine}";
-                    private static final String BACKEND = "{backend}";
-                    private static final String ENTRY = "{entry}";
-                    private static final String PAYLOAD_DIR = "payload";
-                    private static final String RUNTIME_DIR = "runtime";
-                    private static final String BOX64_REL = "box64/usr/local/bin/box64";
-                    private static final String LOADER_REL = "rootfs/usr/lib/ld-linux-aarch64.so.1";
-                    private static final String WINE_REL = "rootfs/opt/wine/bin/wine";
-
-                    @Override
-                    protected void onCreate(Bundle savedInstanceState) {{
-                        super.onCreate(savedInstanceState);
-                        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                        StringBuilder sb = new StringBuilder("PortAgent\\n" + ENGINE
-                                + "  [" + ABI + ", " + BACKEND + "]\\n\\n");
-                        try {{
-                            sb.append(unpackAssets("game", new File(getFilesDir(), PAYLOAD_DIR)));
-                            sb.append(unpackAssets("runtime", new File(getFilesDir(), RUNTIME_DIR)));
-                            sb.append(prepareWine(new File(getFilesDir(), RUNTIME_DIR)));
-                            sb.append(launch());
-                        }} catch (Throwable t) {{
-                            sb.append("FAILED: ").append(t).append("\\n");
-                            Log.e(TAG, "container failed", t);
-                        }}
-                        TextView tv = new TextView(this);
-                        tv.setText(sb.toString());
-                        tv.setPadding(48, 48, 48, 48);
-                        setContentView(tv);
-                    }}
-
-                    /** Runs the chain and streams the first lines of output. */
-                    private String launch() throws IOException, InterruptedException {{
-                        File runtime = new File(getFilesDir(), RUNTIME_DIR);
-                        File payload = new File(getFilesDir(), PAYLOAD_DIR);
-                        File box64 = new File(runtime, BOX64_REL);
-                        File loader = new File(runtime, LOADER_REL);
-                        File wine = new File(runtime, WINE_REL);
-                        if (!box64.isFile()) return "box64 missing at " + box64;
-                        if (!wine.isFile()) return "wine missing at " + wine;
-                        File exe = findExe(payload);
-                        if (exe == null) return "no .exe found in payload";
-
-                        box64.setExecutable(true);
-                        wine.setExecutable(true);
-                        File prefix = new File(getFilesDir(), "prefix");
-                        prefix.mkdirs();
-
-                        List<String> cmd = new ArrayList<>();
-                        // box64's PT_INTERP points at Winlator's private path, so
-                        // start it through the loader we ship instead of exec'ing
-                        // the binary directly: loader box64 wine game.exe
-                        cmd.add(loader.getAbsolutePath());
-                        cmd.add(box64.getAbsolutePath());
-                        cmd.add(wine.getAbsolutePath());
-                        cmd.add(exe.getAbsolutePath());
-
-                        ProcessBuilder pb = new ProcessBuilder(cmd);
-                        pb.directory(prefix);
-                        pb.redirectErrorStream(true);
-                        String rootLib = new File(runtime, "rootfs/usr/lib").getAbsolutePath();
-                        String x64Lib = new File(runtime, "rootfs/usr/lib/x86_64-linux-gnu")
-                                .getAbsolutePath();
-                        String wineDllPath = new File(runtime, "rootfs/opt/wine/lib/wine")
-                                .getAbsolutePath();
-                        pb.environment().put("WINEPREFIX", prefix.getAbsolutePath());
-                        pb.environment().put("LD_LIBRARY_PATH", rootLib + ":" + x64Lib);
-                        pb.environment().put("BOX64_LD_LIBRARY_PATH", rootLib + ":" + x64Lib);
-                        pb.environment().put("WINEDLLPATH", wineDllPath);
-                        // The Wine loader stub execs a preloader from its build path;
-                        // WINELOADERNOEXEC makes it load ntdll.so in-process instead,
-                        // which is what our relocated rootfs needs.
-                        pb.environment().put("WINELOADERNOEXEC", "1");
-                        pb.environment().put("BOX64_PATH",
-                                new File(runtime, "rootfs/opt/wine/bin").getAbsolutePath());
-                        pb.environment().put("WINEDEBUG", "-all");
-                        // Prefer our staged DXVK/VKD3D DLLs over Wine builtins.
-                        pb.environment().put("WINEDLLOVERRIDES",
-                                "d3d8,d3d9,d3d10core,d3d11,d3d12,d3d12core,dxgi=n,b");
-                        pb.environment().put("BOX64_LOG", "0");
-                        pb.environment().put("BOX64_DYNAREC", "1");
-                        pb.environment().put("BOX64_NOBANNER", "1");
-                        pb.environment().put("BOX64_DYNAREC_SAFEFLAGS", "2");
-                        pb.environment().put("BOX64_DYNAREC_BIGBLOCK", "1");
-                        pb.environment().put("BOX64_DYNAREC_STRONGMEM", "0");
-                        pb.environment().put("BOX64_DYNAREC_CALLRET", "1");
-                        pb.environment().put("HOME", getFilesDir().getAbsolutePath());
-                        // Per-game Box64 tuning table shipped from the runtime.
-                        File rc = new File(runtime, "box64/box64rc/default.box64rc");
-                        if (rc.isFile()) {{
-                            File home = new File(getFilesDir(), ".box64rc");
-                            copyFile(rc, home);
-                        }}
-                        pb.environment().put("PAGENT_BACKEND", BACKEND);
-                        if (!"gles3".equals(BACKEND)) {{
-                            pb.environment().put("DXVK_HUD", "0");
-                            pb.environment().put("VK_ICD_FILENAMES",
-                                    new File(runtime,
-                                        "drivers/turnip/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-                                    ).getAbsolutePath());
-                        }}
-                        Process p = pb.start();
-                        StringBuilder out = new StringBuilder();
-                        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {{
-                            String line;
-                            int n = 0;
-                            while ((line = r.readLine()) != null && n++ < 40) {{
-                                out.append(line).append('\\n');
-                            }}
-                        }}
-                        out.append("\\nexit=").append(p.waitFor()).append('\\n');
-                        out.append("cmd: loader box64 wine ").append(exe.getName()).append('\\n');
-                        return out.toString();
-                    }}
-
-                    private File findExe(File dir) {{
-                        File[] kids = dir.listFiles();
-                        if (kids == null) return null;
-                        File best = null;
-                        for (File f : kids) {{
-                            if (f.isDirectory()) {{
-                                File sub = findExe(f);
-                                if (sub != null && (best == null || sub.length() > best.length())) best = sub;
-                            }} else if (f.getName().toLowerCase().endsWith(".exe")) {{
-                                if (best == null || f.length() > best.length()) best = f;
-                            }}
-                        }}
-                        return best;
-                    }}
-
-                    /**
-                     * Stages the DXVK / VKD3D DLLs into the Wine prefix so Wine
-                     * resolves d3d9/10/11/12/dxgi to them (native,builtin) instead
-                     * of its own builtins. Also rewrites the Turnip ICD so it
-                     * points at our unpacked libvulkan_freedreno.so rather than
-                     * Winlator's private path. Idempotent: safe to run each start.
-                     */
-                    private String prepareWine(File runtime) throws IOException {{
-                        File prefix = new File(getFilesDir(), "prefix");
-                        File sys32 = new File(prefix, "drive_c/windows/system32");
-                        File syswow = new File(prefix, "drive_c/windows/syswow64");
-                        sys32.mkdirs();
-                        syswow.mkdirs();
-                        StringBuilder note = new StringBuilder();
-                        note.append("dxvk: ").append(
-                            installDlls(new File(runtime, "dxvk"), sys32, syswow));
-                        note.append(", vkd3d: ").append(
-                            installDlls(new File(runtime, "vkd3d"), sys32, syswow));
-                        // Loader path in the ICD must be absolute and real.
-                        File icd = new File(runtime,
-                            "drivers/turnip/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json");
-                        File lib = new File(runtime, "drivers/turnip/usr/lib/libvulkan_freedreno.so");
-                        if (icd.isFile() && lib.isFile()) {{
-                            String json = "{{\\n"
-                                + "  \\"ICD\\": {{\\n"
-                                + "    \\"api_version\\": \\"1.4.354\\",\\n"
-                                + "    \\"library_arch\\": \\"64\\",\\n"
-                                + "    \\"library_path\\": \\"" + lib.getAbsolutePath() + "\\"\\n"
-                                + "  }},\\n"
-                                + "  \\"file_format_version\\": \\"1.0.1\\"\\n"
-                                + "}}\\n";
-                            try (OutputStream os = new FileOutputStream(icd)) {{
-                                os.write(json.getBytes("UTF-8"));
-                            }}
-                            note.append(", icd: fixed");
-                        }}
-                        note.append("\\n");
-                        return note.toString();
-                    }}
-
-                    /** Copies *.dll from <src>/system32|syswow64 into the prefix. */
-                    private int installDlls(File src, File sys32, File syswow) throws IOException {{
-                        int n = 0;
-                        n += copyDllDir(new File(src, "system32"), sys32);
-                        n += copyDllDir(new File(src, "syswow64"), syswow);
-                        return n;
-                    }}
-
-                    private int copyDllDir(File from, File to) throws IOException {{
-                        File[] kids = from.listFiles();
-                        if (kids == null) return 0;
-                        int n = 0;
-                        for (File f : kids) {{
-                            if (f.isFile() && f.getName().toLowerCase().endsWith(".dll")) {{
-                                copyFile(f, new File(to, f.getName()));
-                                n++;
-                            }}
-                        }}
-                        return n;
-                    }}
-
-                    /** Copies an asset subtree onto the real filesystem, returns a note. */
-                    private String unpackAssets(String assetPath, File dest) throws IOException {{
-                        AssetManager am = getAssets();
-                        String[] top = am.list(assetPath);
-                        if (top == null || top.length == 0) return "assets/" + assetPath + ": empty\\n";
-                        dest.mkdirs();
-                        int n = copyDir(am, assetPath, dest);
-                        return "assets/" + assetPath + ": " + n + " files -> " + dest + "\\n";
-                    }}
-
-                    private int copyDir(AssetManager am, String path, File dest) throws IOException {{
-                        int count = 0;
-                        String[] children = am.list(path);
-                        if (children == null) return 0;
-                        for (String child : children) {{
-                            String sub = path + "/" + child;
-                            String[] grand = am.list(sub);
-                            if (grand != null && grand.length > 0) {{
-                                File dir = new File(dest, child);
-                                dir.mkdirs();
-                                count += copyDir(am, sub, dir);
-                            }} else {{
-                                File out = new File(dest, child);
-                                out.getParentFile().mkdirs();
-                                try (InputStream in = am.open(sub); OutputStream os = new FileOutputStream(out)) {{
-                                    byte[] buf = new byte[1 << 16];
-                                    int r;
-                                    while ((r = in.read(buf)) > 0) os.write(buf, 0, r);
-                                }}
-                                count++;
-                            }}
-                        }}
-                        return count;
-                    }}
-
-                    private void copyFile(File from, File to) throws IOException {{
-                        try (InputStream in = new java.io.FileInputStream(from);
-                             OutputStream os = new FileOutputStream(to)) {{
-                            byte[] buf = new byte[1 << 16];
-                            int r;
-                            while ((r = in.read(buf)) > 0) os.write(buf, 0, r);
-                        }}
-                    }}
-                }}
-                """
-            ),
-            encoding="utf-8",
+        tokens = {
+            "__PACKAGE__": package,
+            "__ENGINE__": engine,
+            "__ABI__": abi,
+            "__BACKEND__": backend,
+            "__ENTRY__": entry or "",
+            "__HEAP__": str(plan.heap_mb),
+        }
+        sources = (
+            ("GpuProbe.java", jt.GPU_PROBE_JAVA),
+            ("Device.java", jt.DEVICE_JAVA),
+            ("PortService.java", jt.SERVICE_JAVA),
+            ("PortActivity.java", jt.ACTIVITY_JAVA),
         )
+        for name, body in sources:
+            for key, val in tokens.items():
+                body = body.replace(key, val)
+            (jdir / name).write_text(body, encoding="utf-8")
 
 
 
@@ -781,7 +549,11 @@ class ApkPackager:
             <manifest xmlns:android="http://schemas.android.com/apk/res/android"
                 package="{package}">
                 <uses-permission android:name="android.permission.INTERNET"/>
+                <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+                <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+                <uses-permission android:name="android.permission.WAKE_LOCK"/>
                 <uses-feature android:glEsVersion="{gles}" android:required="true"/>
+                <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
                 <application
                     android:label="@string/app_name"
                     android:hasCode="true"
@@ -790,13 +562,21 @@ class ApkPackager:
                     <activity
                         android:name=".PortActivity"
                         android:exported="true"
-                        android:configChanges="orientation|screenSize|keyboardHidden"
-                        android:screenOrientation="landscape">
+                        android:resizeableActivity="true"
+                        android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density"
+                        android:screenOrientation="sensorLandscape">
                         <intent-filter>
                             <action android:name="android.intent.action.MAIN"/>
                             <category android:name="android.intent.category.LAUNCHER"/>
                         </intent-filter>
                     </activity>
+                    <service
+                        android:name=".PortService"
+                        android:exported="false"
+                        android:foregroundServiceType="specialUse">
+                        <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                            android:value="Runs the ported game process"/>
+                    </service>
                 </application>
             </manifest>
             """

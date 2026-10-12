@@ -157,7 +157,11 @@ supported way to get a working Android toolchain on a clean machine. It is pure
 Python — it does **not** shell out to `apt`, `winget`, or `choco`:
 
 1. find an existing JDK (`JAVA_HOME` or an already-unpacked Temurin in the
-   tools home); otherwise download Temurin 17 from the Adoptium API;
+   tools home); otherwise download Temurin 17 from the Adoptium API. The API
+   *redirects to a `.tar.gz`* even though the cached file is named `jdk.zip`, so
+   `_extract_archive` picks the reader by magic bytes (gzip/bzip2 → tar, `PK` →
+   zip) instead of trusting the suffix — trusting it raised
+   "File is not a zip file";
 2. download the Android `commandlinetools` zip, fix up the Unix executable bit
    (Python's `zipfile` drops it — without this `sdkmanager` is not runnable),
    then run `sdkmanager --licenses` and install
@@ -171,7 +175,13 @@ Python — it does **not** shell out to `apt`, `winget`, or `choco`:
 
 On Windows the packager invokes `.bat`/`.cmd` through `cmd.exe` (CreateProcess
 cannot exec them directly), and `javac`/`keytool` are resolved through
-`JAVA_HOME` first via `packager._java_tool`.
+`JAVA_HOME` first via `packager._java_tool`. `packager._run` also prepends
+`$JAVA_HOME/bin` to `PATH` for every child, because the build-tools wrappers
+(`d8`, `apksigner`) `exec` a bare `java`; without this the APK build fails at
+`d8` on a machine whose JDK was only bootstrapped. Use `os.path`, not `pathlib`,
+when building that path: tests simulate Windows by patching `os.name`, which
+flips the `pathlib` flavour to `WindowsPath` and raises `UnsupportedOperation`
+on Linux.
 
 Windows ships a JDK *shim* directory (`...\Common Files\Oracle\Java\javapath`)
 that puts `javac` on PATH without being a JDK home; users often also have a
@@ -185,3 +195,45 @@ bootstrapped `JAVA_HOME` override an invalid one in the shell.
 `Winlator_11.2.apk` (no trailing `.0`). If the pinned URL ever 404s,
 `_resolve_winlator_url` falls back to the GitHub releases API so the fetch
 self-heals instead of hard-failing.
+
+## Device-aware optimization
+
+`portagent/device.py` derives a `DeviceProfile` (model, SoC, GPU vendor, RAM,
+panel, ABI) and a `DeviceTuning` (render target, FPS cap, heap, Box64 dynarec
+mode, Vulkan driver). `resolve(spec)` accepts `auto` (adb device, else this
+machine), an inline `key=value,key=value` string, or a JSON path;
+`Optimizer.plan(..., device=...)` merges the tuning env into the plan and
+`ApkPackager` bakes it into the generated Java. CLI: `port`/`portall
+--device <spec>` and the `device` subcommand to preview a profile.
+
+Two hard-won facts that RAM alone gets wrong:
+
+- **GPU vendor decides the driver.** Turnip is Adreno-only (`freedreno`), so a
+  Mali device (e.g. Tecno Spark 10 Pro, Helio G88 / Mali-G52) must NOT get the
+  bundled Turnip ICD. `device.DRIVER_FOR_VENDOR` maps Mali/PowerVR → system
+  Vulkan (or VirGL/Zink), Adreno/Xclipse → turnip.
+- **RAM over-tiers weak SoCs.** An 8 GB Helio G88 is "high" by RAM but cannot
+  push a 1440p DXVK frame, so `_render_tier` caps known weak SoCs to the mid
+  render target (1080 long edge). The panel is *not* rendered 1:1 — the game
+  renders at the tuning target and is scaled up; that is what keeps a
+  mid-range phone playable.
+
+## The grey/black screen (why it happens)
+
+The bundled Wine rootfs ships only `winex11.drv`, and there is **no X server**
+binary in the bundle, so Wine cannot create a window → the grey/black screen
+the user saw. Winlator's X server (`com.winlator.xserver.*`) is a *pure-Java*
+component packaged inside its APK, not a standalone executable, so it does not
+come along with the fetched `assets/` payload. The generated `PortService`
+therefore looks for a display server (`findXServer`) and, if absent, reports it
+by name and refuses to launch Wine — it never fakes a running game. Bundling a
+real renderer (virgl `libvirglrenderer.so` + a Java X server) is the remaining
+work to make rendering actually start.
+
+## Runtime payload pruning
+
+`RuntimeBundler.bundle(..., prune=True)` skips docs/man/locales/`*.a`/`*.h`/
+`winedbg*` etc. This trims only a few percent of the ~558 MB Wine stack (most
+weight is the `rootfs/opt/wine` tree itself), and the executables and `.so`
+files are never touched. The biggest APK-size lever is the game payload, which
+is copied verbatim.

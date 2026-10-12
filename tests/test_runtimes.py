@@ -117,6 +117,40 @@ class ReadinessTests(unittest.TestCase):
             self.assertTrue(runtimes.runtime_ready(home))
 
 
+class RuntimePruneTests(unittest.TestCase):
+    def test_bundle_prunes_docs_but_keeps_executables(self):
+        from portagent.runtime import RuntimeBundler, RuntimeConfig
+
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "runtime"
+            src = home / "wine_dxvk"
+            (src / "rootfs/usr/share/man").mkdir(parents=True)
+            (src / "rootfs/opt/wine/bin").mkdir(parents=True)
+            (src / "rootfs/usr/lib").mkdir(parents=True)
+            (src / "rootfs/usr/share/man/wine.1").write_text("doc")
+            (src / "rootfs/opt/wine/bin/wine").write_text("ELF")
+            (src / "rootfs/usr/lib/libfoo.a").write_text("static")
+            (src / "rootfs/usr/lib/libfoo.so").write_text("shared")
+            cfg = RuntimeConfig(runtime_class="wine_dxvk", entry="Game.exe")
+            dest = Path(td) / "out"
+            copied = RuntimeBundler(home).bundle(cfg, dest)
+
+            got = set(copied)
+            self.assertIn("rootfs/opt/wine/bin/wine", got)
+            self.assertIn("rootfs/usr/lib/libfoo.so", got)
+            self.assertNotIn("rootfs/usr/share/man/wine.1", got)
+            self.assertNotIn("rootfs/usr/lib/libfoo.a", got)
+            self.assertFalse((dest / "rootfs/usr/share/man/wine.1").exists())
+
+    def test_bundle_without_runtime_is_empty(self):
+        from portagent.runtime import RuntimeBundler, RuntimeConfig
+        with tempfile.TemporaryDirectory() as td:
+            cfg = RuntimeConfig(runtime_class="wine_dxvk", entry="Game.exe")
+            self.assertEqual(
+                RuntimeBundler(Path(td) / "runtime").bundle(cfg, Path(td) / "o"), []
+            )
+
+
 class ContainerActivityTests(unittest.TestCase):
     def test_generated_activity_runs_box64_wine(self):
         from portagent.optimizer import Optimizer
@@ -134,20 +168,34 @@ class ContainerActivityTests(unittest.TestCase):
             jdir = Path(td) / "java" / "dev" / "portagent" / "port"
             ApkPackager(Path(td))._write_container_activity(
                 jdir, "dev.portagent.port", "Game", "godot", "Game.exe", plan, cfg)
-            src = (jdir / "PortActivity.java").read_text()
-        self.assertIn("class PortActivity extends Activity", src)
-        self.assertIn("ProcessBuilder", src)
-        self.assertIn("box64/usr/local/bin/box64", src)
-        self.assertIn("rootfs/opt/wine/bin/wine", src)
-        self.assertIn("WINEPREFIX", src)
-        self.assertIn("WINEDLLOVERRIDES", src)
-        self.assertIn("d3d11", src)
-        self.assertIn("prepareWine", src)
-        self.assertIn("freedreno_icd.aarch64.json", src)
-        self.assertIn("WINELOADERNOEXEC", src)
-        self.assertIn("WINEDLLPATH", src)
-        self.assertIn('unpackAssets("runtime"', src)
-        self.assertIn('unpackAssets("game"', src)
+            service = (jdir / "PortService.java").read_text()
+            activity = (jdir / "PortActivity.java").read_text()
+            device = (jdir / "Device.java").read_text()
+            probe = (jdir / "GpuProbe.java").read_text()
+        # The heavy run lives in a foreground service, not the UI thread.
+        self.assertIn("class PortService extends Service", service)
+        self.assertIn("startForeground", service)
+        self.assertIn("ProcessBuilder", service)
+        self.assertIn("box64/usr/local/bin/box64", service)
+        self.assertIn("rootfs/opt/wine/bin/wine", service)
+        self.assertIn("WINEPREFIX", service)
+        self.assertIn("WINEDLLOVERRIDES", service)
+        self.assertIn("d3d11", service)
+        self.assertIn("prepareWine", service)
+        self.assertIn("freedreno_icd.aarch64.json", service)
+        self.assertIn("WINELOADERNOEXEC", service)
+        self.assertIn("WINEDLLPATH", service)
+        self.assertIn('unpack("runtime"', service)
+        self.assertIn('unpack("game"', service)
+        # Device-aware tuning + display diagnostics.
+        self.assertIn("DXVK_FRAME_RATE", service)
+        self.assertIn("PAGENT_RENDER_W", service)
+        self.assertIn("findXServer", service)
+        self.assertIn("Device.detect", service)
+        self.assertIn("totalRamMb", device)
+        self.assertIn("VIRGL", probe.upper() + device.upper())  # mali->virgl mapping present
+        self.assertIn("class PortActivity extends Activity", activity)
+        self.assertIn("startForegroundService", activity)
 
 
 if __name__ == "__main__":

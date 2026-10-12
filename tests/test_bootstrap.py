@@ -106,7 +106,7 @@ class EnsureJdkTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"JAVA_HOME": str(shim.parent)}), \
                     mock.patch.object(bs.shutil, "which", return_value=str(shim / exe)), \
                     mock.patch.object(bs, "_download", fake_download), \
-                    mock.patch.object(bs, "_unzip", lambda *a, **k: None):
+                    mock.patch.object(bs, "_extract_archive", lambda *a, **k: None):
                 jdk = bs.ensure_jdk(home)
             self.assertIsNotNone(jdk)
             self.assertTrue(bs._is_valid_java_home(jdk))

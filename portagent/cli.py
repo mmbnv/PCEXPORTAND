@@ -99,7 +99,9 @@ def _cmd_port(args: argparse.Namespace) -> int:
         decompile = Decompiler(work / "decompiled").decompile(profile)
 
     translated = Translator(work / "translated").translate(profile, strategy)
-    plan = Optimizer().plan(profile, strategy)
+    from .device import resolve as resolve_device
+    dev = resolve_device(getattr(args, "device", None))
+    plan = Optimizer().plan(profile, strategy, device=dev)
     runtime = RuntimePlanner().plan(profile, strategy, plan)
     result = ApkPackager(work).package(
         game, translated, plan, app_label=label, runtime=runtime
@@ -125,6 +127,7 @@ def _cmd_port(args: argparse.Namespace) -> int:
         "runtime_bundled": result.runtime_bundled,
         "decompile": decompile.to_dict() if decompile else {"status": "skipped"},
         "optimization": plan.to_dict(),
+        "device": dev.to_dict(),
         "steps": result.steps,
         "message": (
             "installable signed APK produced"
@@ -138,7 +141,8 @@ def _cmd_port(args: argparse.Namespace) -> int:
     return 0 if result.status == "ok" else 1
 
 
-def _port_one(game: Path, work: Path, decompile: bool = True) -> dict:
+def _port_one(game: Path, work: Path, decompile: bool = True,
+              device: str | None = None) -> dict:
     """Run the full single-title pipeline and return a summary dict."""
     from .decompiler import Decompiler
     from .optimizer import Optimizer
@@ -162,9 +166,10 @@ def _port_one(game: Path, work: Path, decompile: bool = True) -> dict:
 
     planner = Planner()
     strategy = planner.choose(profile)[0].name
+    from .device import resolve as resolve_device
     dec = Decompiler(work / "decompiled").decompile(profile) if decompile else None
     translated = Translator(work / "translated").translate(profile, strategy)
-    plan = Optimizer().plan(profile, strategy)
+    plan = Optimizer().plan(profile, strategy, device=resolve_device(device))
     runtime = RuntimePlanner().plan(profile, strategy, plan)
     pkg = ApkPackager(work).package(
         game, translated, plan, app_label=game.name, runtime=runtime
@@ -203,7 +208,8 @@ def _cmd_portall(args: argparse.Namespace) -> int:
     work_root = Path(args.work_dir)
     rows = []
     for g in games:
-        row = _port_one(g, work_root / g.name, decompile=not args.no_decompile)
+        row = _port_one(g, work_root / g.name, decompile=not args.no_decompile,
+                       device=getattr(args, "device", None))
         row["expected_feasible"] = expected.get(g.name, True)
         rows.append(row)
 
@@ -244,6 +250,17 @@ def _cmd_fetch_runtimes(args: argparse.Namespace) -> int:
     print("\nRuntime NOT fully installed; see checks/logs above.", file=sys.stderr)
     return 1
 
+
+
+def _cmd_device(args: argparse.Namespace) -> int:
+    from .device import describe, resolve, tune
+
+    dev = resolve(getattr(args, "spec", None), adb=getattr(args, "adb", None))
+    t = tune(dev)
+    out = {"device": dev.to_dict(), "tuning": t.to_dict()}
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    print("\n" + describe(dev, t), file=sys.stderr)
+    return 0
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
@@ -321,11 +338,19 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--memory", default="portagent_memory.sqlite")
     m.set_defaults(func=_cmd_memory)
 
+    de = sub.add_parser("device", help="show the device profile and tuning that will be used")
+    de.add_argument("spec", nargs="?", default=None,
+                    help="auto | prop JSON path | key=value props (default: auto)")
+    de.add_argument("--adb", default=None, help="path to adb")
+    de.set_defaults(func=_cmd_device)
+
     po = sub.add_parser("port", help="analyze -> translate -> build an installable APK")
     po.add_argument("game", help="game folder or installer file")
     po.add_argument("-o", "--output", default=None, help="output .apk path")
     po.add_argument("--work-dir", default="portagent_out")
     po.add_argument("--no-decompile", action="store_true", help="skip code recovery")
+    po.add_argument("--device", default=None,
+                    help="tuning target: auto (adb), a prop JSON, or key=value props")
     po.set_defaults(func=_cmd_port)
 
     pa = sub.add_parser(
@@ -335,6 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("games", nargs="*", help="game folders (default: built-in fixtures)")
     pa.add_argument("--work-dir", default="portagent_all")
     pa.add_argument("--no-decompile", action="store_true", help="skip code recovery")
+    pa.add_argument("--device", default=None, help="tuning target (see `port --device`)")
     pa.set_defaults(func=_cmd_portall)
 
     gu = sub.add_parser("gui", help="open the desktop GUI (Tkinter window)")
